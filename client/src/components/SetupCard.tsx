@@ -67,7 +67,7 @@ export function SetupCard({ draft, onChange, onNewGame }: Props) {
       <p className="muted small">
         {draft.mode === "bot"
           ? "Bot ratings are estimates on the Chess.com scale. Only your moves are graded."
-          : "You move both colors; only your color's moves are graded."}
+          : "You move both colors and every move is graded. My color sits at the bottom of the board."}
       </p>
     </section>
   );

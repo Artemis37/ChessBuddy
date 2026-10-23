@@ -18,7 +18,7 @@ export interface PlayedMove {
   captured?: PieceSymbol;
   fenBefore: string;
   fenAfter: string;
-  /** The player's own moves are graded automatically; others only when asked. */
+  /** Graded automatically: the player's own moves, or every move when playing both sides. Others only when asked. */
   graded: boolean;
   grading?: boolean;
   grade?: MoveGrade;

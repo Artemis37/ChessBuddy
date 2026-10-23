@@ -1,9 +1,9 @@
 # ChessBuddy
 
-A local chess learning app. Play Stockfish or play both sides yourself; every move of your color is graded by the engine, and an **Explain** button has Claude walk you through why the move was good or bad.
+A local chess learning app. Play Stockfish or play both sides yourself; the engine grades your moves (every move when you play both sides), and an **Explain** button has Claude walk you through why the move was good or bad.
 
 - **Play the bot**: pick your color and a bot rating from 400 to 2600 (an estimate on the Chess.com scale) or full-strength Stockfish. Your moves are graded automatically.
-- **Play both sides**: you move both colors; the color you pick as "My color" is graded automatically.
+- **Play both sides**: you move both colors and every move, White's and Black's, is graded automatically, with its icon (★ Best, ! Excellent, ✓ Good, ?! Inaccuracy, ? Mistake, ?? Blunder) in the move list. "My color" sits at the bottom of the board, and explanations treat the other color as your opponent.
 - **Chess.com-style board**: drag a piece or click it and then a target square. Dots show where it can go, rings show captures, and the square you picked it up from turns yellow; the last move stays highlighted in yellow and every move slides into place. Player bars show captured pieces and the material lead (+1, +2, …), and an evaluation bar sits on the left. The board stays centered in the window while the side panel scrolls. **Flip board** turns the board around; **Undo** takes back your last move (and the bot's reply).
 - **Premoves**: while the bot is thinking, move your pieces anyway; the premove squares turn red and the move is played the moment the bot has moved (several can be queued). An illegal premove is dropped, and right-clicking the board cancels them.
 - **Move list like chess.com**: the opening name on top, then the moves in White and Black columns. Click a move, use the |< < > >| buttons, or the arrow keys (Home/End too) to see the position after any move; going forward to the last move lets you play on.

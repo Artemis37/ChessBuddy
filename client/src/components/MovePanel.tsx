@@ -13,6 +13,8 @@ interface Props {
   move?: PlayedMove;
   index: number | null;
   myColor: Color;
+  /** Playing both sides: every move is graded, and the other color is yours to move too. */
+  bothSides: boolean;
   onBoard: boolean;
   coach: StatusResponse["coach"] | null;
   model: string;
@@ -32,6 +34,7 @@ export function MovePanel({
   move,
   index,
   myColor,
+  bothSides,
   onBoard,
   coach,
   model,
@@ -49,8 +52,9 @@ export function MovePanel({
       <section className="card panel">
         <h2>Move review</h2>
         <p className="muted">
-          Every {colorName(myColor)} move you play gets graded here. Click any move in the list to review it, including
-          your opponent's.
+          {bothSides
+            ? "Every move, White's and Black's, gets graded here. Click any move in the list to review it."
+            : `Every ${colorName(myColor)} move you play gets graded here. Click any move in the list to review it, including your opponent's.`}
         </p>
       </section>
     );
@@ -58,7 +62,11 @@ export function MovePanel({
 
   const mine = move.color === myColor;
   const title = `${moveNumber(index)} ${move.san}`;
-  const owner = mine ? "Your move" : `Your opponent's move (${colorName(move.color)})`;
+  const owner = mine
+    ? "Your move"
+    : bothSides
+      ? `The other side's move (${colorName(move.color)})`
+      : `Your opponent's move (${colorName(move.color)})`;
 
   if (move.gradeError) {
     return (

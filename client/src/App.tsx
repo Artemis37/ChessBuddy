@@ -159,13 +159,14 @@ export function App() {
         captured: made.captured,
         fenBefore: fen,
         fenAfter: board.fen(),
-        graded: made.color === settings.myColor,
+        // Playing both sides you move every piece, so every move is graded.
+        graded: settings.mode === "both" || made.color === settings.myColor,
       };
       setMoves((list) => [...list, move]);
       if (move.graded) grade(move);
       return true;
     },
-    [fen, settings.myColor, grade],
+    [fen, settings.mode, settings.myColor, grade],
   );
 
   // The bot replies whenever it is its turn.
@@ -527,6 +528,7 @@ export function App() {
             move={panelIndex === null ? undefined : moves[panelIndex]}
             index={panelIndex}
             myColor={settings.myColor}
+            bothSides={settings.mode === "both"}
             onBoard={!live && panelIndex === shownCount - 1}
             coach={status?.coach ?? null}
             model={coachModel}
