@@ -1,3 +1,4 @@
+import type { PieceSymbol } from "chess.js";
 import type { BotRating, Color, Explanation, MoveGrade, Classification } from "../../shared/types";
 
 export type Mode = "bot" | "both";
@@ -13,10 +14,13 @@ export interface PlayedMove {
   san: string;
   uci: string;
   color: Color;
+  /** The piece this move captured, if any. */
+  captured?: PieceSymbol;
   fenBefore: string;
   fenAfter: string;
-  /** Only the player's own color is graded. */
+  /** The player's own moves are graded automatically; others only when asked. */
   graded: boolean;
+  grading?: boolean;
   grade?: MoveGrade;
   gradeError?: string;
   explanation?: Explanation;

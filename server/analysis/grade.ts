@@ -1,7 +1,8 @@
 import { Chess } from "chess.js";
-import type { EngineLine, EngineScore, MoveGrade } from "../../shared/types";
+import type { EngineLine, EngineScore, MoveGrade, PositionEval } from "../../shared/types";
 import { classify, formatEval, negate, winPercent } from "./evaluation";
 import { hangingPieces, materialSwing, pieceName, sanLine, toMoveInput } from "./motifs";
+import { toWhite } from "./position";
 
 export interface Analyzer {
   analyze(fen: string, options: { multipv: number; depth: number }): Promise<EngineLine[]>;
@@ -34,6 +35,11 @@ export async function gradeMove(engine: Analyzer, fenBefore: string, uci: string
   const winAfter = checkmate ? 100 : afterScore ? winPercent(afterScore) : 50;
   const winDrop = Math.max(0, winBefore - winAfter);
   const opponentLine = gameOver ? [] : after[0].pv;
+  const positionAfter: PositionEval = checkmate
+    ? { score: { mate: 0 }, outcome: mover === "w" ? "white" : "black" }
+    : afterScore
+      ? { score: toWhite(afterScore, mover) }
+      : { score: { cp: 0 }, outcome: "draw" };
 
   const grade: MoveGrade = {
     fenBefore,
@@ -47,6 +53,8 @@ export async function gradeMove(engine: Analyzer, fenBefore: string, uci: string
     winDrop: round(winDrop),
     evalBefore: formatEval(bestScore),
     evalAfter: checkmate ? "#" : afterScore ? formatEval(afterScore) : "0.00",
+    positionBefore: { score: toWhite(bestScore, mover) },
+    positionAfter,
     bestMoves: before
       .filter((line) => line.pv.length > 0)
       .map((line) => ({

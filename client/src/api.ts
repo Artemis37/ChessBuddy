@@ -1,4 +1,12 @@
-import type { BotMoveResponse, BotRating, Explanation, MoveGrade, StatusResponse } from "../../shared/types";
+import type {
+  BotMoveResponse,
+  BotRating,
+  Explanation,
+  MoveGrade,
+  Perspective,
+  PositionEval,
+  StatusResponse,
+} from "../../shared/types";
 
 async function request<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(path, {
@@ -15,5 +23,7 @@ export const api = {
   status: () => request<StatusResponse>("/api/status"),
   botMove: (fen: string, rating: BotRating) => request<BotMoveResponse>("/api/bot-move", { fen, rating }),
   grade: (fen: string, uci: string) => request<MoveGrade>("/api/grade", { fen, uci }),
-  explain: (grade: MoveGrade, history: string[]) => request<Explanation>("/api/explain", { grade, history }),
+  evaluate: (fen: string) => request<PositionEval>("/api/eval", { fen }),
+  explain: (grade: MoveGrade, history: string[], model: string, perspective: Perspective) =>
+    request<Explanation>("/api/explain", { grade, history, model, perspective }),
 };

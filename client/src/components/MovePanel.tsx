@@ -1,5 +1,5 @@
 import { numberedLine } from "../../../shared/notation";
-import type { Color, StatusResponse } from "../../../shared/types";
+import { COACH_MODELS, coachModelLabel, type Color, type StatusResponse } from "../../../shared/types";
 import { CLASSIFICATION, colorName, moveNumber, type PlayedMove } from "../game";
 
 interface Props {
@@ -8,51 +8,75 @@ interface Props {
   myColor: Color;
   onBoard: boolean;
   coach: StatusResponse["coach"] | null;
+  model: string;
+  onModelChange: (model: string) => void;
   onExplain: (index: number) => void;
   onRetry: (index: number) => void;
-  onRegrade: (index: number) => void;
+  /** Grades a move: the other side's on request, or yours again after a failure. */
+  onAnalyze: (index: number) => void;
   onShowOnBoard: (index: number) => void;
 }
 
-export function MovePanel({ move, index, myColor, onBoard, coach, onExplain, onRetry, onRegrade, onShowOnBoard }: Props) {
+export function MovePanel({
+  move,
+  index,
+  myColor,
+  onBoard,
+  coach,
+  model,
+  onModelChange,
+  onExplain,
+  onRetry,
+  onAnalyze,
+  onShowOnBoard,
+}: Props) {
   if (!move || index === null) {
     return (
       <section className="card panel">
         <h2>Move review</h2>
-        <p className="muted">Every {colorName(myColor)} move you play gets graded here. Click any move in the list to review it.</p>
+        <p className="muted">
+          Every {colorName(myColor)} move you play gets graded here. Click any move in the list to review it, including
+          your opponent's.
+        </p>
       </section>
     );
   }
 
+  const mine = move.color === myColor;
   const title = `${moveNumber(index)} ${move.san}`;
-
-  if (!move.graded) {
-    return (
-      <section className="card panel">
-        <h2>{title}</h2>
-        <p className="muted">This is a {colorName(move.color)} move. Only your {colorName(myColor)} moves are graded.</p>
-      </section>
-    );
-  }
+  const owner = mine ? "Your move" : `Your opponent's move (${colorName(move.color)})`;
 
   if (move.gradeError) {
     return (
       <section className="card panel">
-        <h2>{title}</h2>
+        <PanelTitle title={title} owner={owner} />
         <p className="error-text">Couldn't analyze this move: {move.gradeError}</p>
-        <button onClick={() => onRegrade(index)}>Try again</button>
+        <button onClick={() => onAnalyze(index)}>Try again</button>
       </section>
     );
   }
 
   const grade = move.grade;
   if (!grade) {
+    const analyzing = move.grading || move.graded;
     return (
       <section className="card panel">
-        <h2>{title}</h2>
-        <p className="muted">
-          <span className="spinner" /> Analyzing with Stockfish…
-        </p>
+        <PanelTitle title={title} owner={owner} />
+        {analyzing ? (
+          <p className="muted">
+            <span className="spinner" /> Analyzing with Stockfish…
+          </p>
+        ) : (
+          <>
+            <p className="muted">Moves by the other side aren't graded automatically.</p>
+            <div className="actions">
+              <button className="primary" onClick={() => onAnalyze(index)}>
+                Analyze this move
+              </button>
+              {!onBoard && <button onClick={() => onShowOnBoard(index)}>Show on board</button>}
+            </div>
+          </>
+        )}
       </section>
     );
   }
@@ -64,14 +88,14 @@ export function MovePanel({ move, index, myColor, onBoard, coach, onExplain, onR
   return (
     <section className="card panel">
       <div className="panel-head">
-        <h2>{title}</h2>
+        <PanelTitle title={title} owner={owner} />
         <span className={`tag ${grade.classification}`}>
           {info.symbol} {info.label}
         </span>
       </div>
 
       <dl className="facts">
-        <dt>Evaluation</dt>
+        <dt>Evaluation{mine ? "" : ` (${colorName(move.color)})`}</dt>
         <dd>
           {grade.evalBefore} → <strong>{grade.evalAfter}</strong>
         </dd>
@@ -91,7 +115,7 @@ export function MovePanel({ move, index, myColor, onBoard, coach, onExplain, onR
         )}
         {grade.opponentReply.length > 0 && (
           <>
-            <dt>Opponent's best reply</dt>
+            <dt>{mine ? "Opponent's best reply" : "Your best reply"}</dt>
             <dd className="line">{numberedLine(grade.fenAfter, grade.opponentReply)}</dd>
           </>
         )}
@@ -100,7 +124,7 @@ export function MovePanel({ move, index, myColor, onBoard, coach, onExplain, onR
       {grade.motifs.length > 0 && (
         <ul className="motifs">
           {grade.motifs.map((m) => (
-            <li key={m}>{m}</li>
+            <li key={m}>{mine ? m : m.replace(/\bYour\b/g, "Their").replace(/\byour\b/g, "their")}</li>
           ))}
         </ul>
       )}
@@ -114,8 +138,20 @@ export function MovePanel({ move, index, myColor, onBoard, coach, onExplain, onR
         >
           {move.explaining ? "Explaining…" : move.explanation ? "Explain again" : "Explain this move"}
         </button>
+        <label className="model-picker">
+          <span className="sr-only">Model</span>
+          <select value={model} onChange={(e) => onModelChange(e.target.value)} disabled={move.explaining}>
+            {COACH_MODELS.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label} · {m.note}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className="actions">
         {!onBoard && <button onClick={() => onShowOnBoard(index)}>Show on board</button>}
-        {weak && <button onClick={() => onRetry(index)}>Retry this move</button>}
+        {mine && weak && <button onClick={() => onRetry(index)}>Retry this move</button>}
       </div>
       {!coach?.ready && <p className="muted small">{coach?.error ?? "Coach unavailable."}</p>}
       {move.explainError && <p className="error-text">{move.explainError}</p>}
@@ -127,12 +163,22 @@ export function MovePanel({ move, index, myColor, onBoard, coach, onExplain, onR
           <p>{move.explanation.why}</p>
           <h3>{grade.isBest ? "Why this was the right choice" : "Better was"}</h3>
           <p>{move.explanation.betterMove}</p>
-          <h3>Opponent's idea</h3>
-          <p>{move.explanation.opponentIdea}</p>
+          <h3>{mine ? "Opponent's idea" : "How to answer it"}</h3>
+          <p>{move.explanation.reply}</p>
           <h3>Lesson</h3>
           <p>{move.explanation.lesson}</p>
+          <p className="muted small">Explained by {coachModelLabel(move.explanation.model)}</p>
         </div>
       )}
     </section>
+  );
+}
+
+function PanelTitle({ title, owner }: { title: string; owner: string }) {
+  return (
+    <div>
+      <h2>{title}</h2>
+      <p className="owner">{owner}</p>
+    </div>
   );
 }

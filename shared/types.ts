@@ -22,6 +22,12 @@ export interface EngineLine {
   pv: string[];
 }
 
+/** How a position stands, from White's point of view; `outcome` is set when the game is over. */
+export interface PositionEval {
+  score: EngineScore;
+  outcome?: "white" | "black" | "draw";
+}
+
 export interface SuggestedLine {
   uci: string;
   san: string;
@@ -46,6 +52,9 @@ export interface MoveGrade {
   winDrop: number;
   evalBefore: string;
   evalAfter: string;
+  /** The same evaluations from White's point of view, for the evaluation bar. */
+  positionBefore: PositionEval;
+  positionAfter: PositionEval;
   /** Engine's top moves in the position before the move (up to 3). */
   bestMoves: SuggestedLine[];
   /** Opponent's best reply line after the played move, in SAN. Empty when the game ended. */
@@ -58,8 +67,26 @@ export interface Explanation {
   verdict: string;
   why: string;
   betterMove: string;
-  opponentIdea: string;
+  /** The best reply to the move and its point. */
+  reply: string;
   lesson: string;
+  /** Model that wrote the explanation. */
+  model: string;
+}
+
+/** Whose move is being explained, from the player's point of view. */
+export type Perspective = "mine" | "opponent";
+
+export const COACH_MODELS = [
+  { id: "claude-sonnet-5-5", label: "Sonnet 5.5", note: "balanced" },
+  { id: "claude-opus-5-5", label: "Opus 5.5", note: "most thorough, slower" },
+  { id: "claude-haiku-5-5", label: "Haiku 5.5", note: "fastest, cheapest" },
+] as const;
+
+export type CoachModelId = (typeof COACH_MODELS)[number]["id"];
+
+export function coachModelLabel(id: string): string {
+  return COACH_MODELS.find((m) => m.id === id)?.label ?? id;
 }
 
 export interface BotMoveResponse {
@@ -69,7 +96,7 @@ export interface BotMoveResponse {
 
 export interface StatusResponse {
   engine: { ready: boolean; error?: string };
-  coach: { ready: boolean; model: string; error?: string };
+  coach: { ready: boolean; defaultModel: string; error?: string };
 }
 
 /** Bot strength: an approximate Chess.com rating, or full-strength Stockfish. */

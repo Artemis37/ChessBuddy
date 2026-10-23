@@ -15,7 +15,8 @@ const EXPLANATION: Explanation = {
   verdict: "Good move.",
   why: "It takes the center.",
   betterMove: "This was the top choice.",
-  opponentIdea: "Black will challenge the center.",
+  reply: "Black will challenge the center.",
+  model: "test-model",
   lesson: "Occupy the center early.",
 };
 
@@ -41,7 +42,7 @@ const unreachable = async (): Promise<never> => {
 };
 
 function fakeCoach(overrides: Partial<AppDeps["coach"]> = {}): AppDeps["coach"] {
-  return { configured: true, model: "test-model", explain: async () => EXPLANATION, ...overrides };
+  return { configured: true, defaultModel: "claude-sonnet-5-5", explain: async () => EXPLANATION, ...overrides };
 }
 
 let server: Server | undefined;
@@ -71,7 +72,7 @@ describe("GET /api/status", () => {
     const call = await start();
     expect(await call("GET", "/api/status")).toEqual({
       status: 200,
-      body: { engine: { ready: true }, coach: { ready: true, model: "test-model" } },
+      body: { engine: { ready: true }, coach: { ready: true, defaultModel: "claude-sonnet-5-5" } },
     });
   });
 
@@ -230,6 +231,67 @@ describe("POST /api/explain", () => {
       status: 400,
       body: { error: "grade: Required" },
     });
+  });
+
+  it("passes the chosen model and perspective to the coach, defaulting to the player's own move", async () => {
+    const seen: unknown[] = [];
+    const call = await start({
+      coach: fakeCoach({
+        explain: async (_grade, _history, options) => {
+          seen.push(options);
+          return EXPLANATION;
+        },
+      }),
+    });
+    await call("POST", "/api/explain", { grade: {}, history: [] });
+    await call("POST", "/api/explain", { grade: {}, history: [], model: "claude-haiku-5-5", perspective: "opponent" });
+    expect(seen).toEqual([
+      { model: "claude-sonnet-5-5", perspective: "mine" },
+      { model: "claude-haiku-5-5", perspective: "opponent" },
+    ]);
+  });
+
+  it("rejects a model that isn't offered", async () => {
+    const call = await start();
+    const { status, body } = await call("POST", "/api/explain", { grade: {}, history: [], model: "gpt-4" });
+    expect(status).toBe(400);
+    expect(body.error).toMatch(/^model: Must be one of claude-sonnet-5-5, claude-opus-5-5, claude-haiku-5-5/);
+  });
+});
+
+describe("POST /api/eval", () => {
+  const AFTER_E4 = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1";
+
+  it("returns the evaluation from White's side", async () => {
+    const call = await start();
+    // The fake engine scores Black-to-move positions at -30 for Black.
+    expect(await call("POST", "/api/eval", { fen: AFTER_E4 })).toEqual({ status: 200, body: { score: { cp: 30 } } });
+  });
+
+  it("reports a finished game", async () => {
+    const call = await start();
+    expect(await call("POST", "/api/eval", { fen: MATED })).toEqual({
+      status: 200,
+      body: { score: { mate: 0 }, outcome: "black" },
+    });
+  });
+
+  it("searches each position once and reuses the result for grading", async () => {
+    const analyzed: string[] = [];
+    const base = fakeAnalyzer();
+    const call = await start({
+      analyzer: fakeAnalyzer({
+        analyze: async (fen, options) => {
+          analyzed.push(fen);
+          return base.analyze(fen, options);
+        },
+      }),
+    });
+    await call("POST", "/api/eval", { fen: AFTER_E4 });
+    await call("POST", "/api/eval", { fen: AFTER_E4 });
+    await call("POST", "/api/grade", { fen: AFTER_E4, uci: "e7e5" });
+    // One search for the position itself, one for the position after the graded move.
+    expect(analyzed.filter((f) => f === AFTER_E4)).toHaveLength(1);
   });
 });
 

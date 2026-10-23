@@ -1,6 +1,56 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { describe, expect, it } from "vitest";
-import { CoachError, coachErrorFrom } from "./coach";
+import type { MoveGrade } from "../shared/types";
+import { buildExplainRequest, CoachError, coachErrorFrom } from "./coach";
+
+const GRADE: MoveGrade = {
+  fenBefore: "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+  fenAfter: "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+  mover: "b",
+  played: { uci: "e7e5", san: "e5" },
+  classification: "best",
+  isBest: true,
+  winBefore: 47,
+  winAfter: 47,
+  winDrop: 0,
+  evalBefore: "-0.30",
+  evalAfter: "-0.32",
+  positionBefore: { score: { cp: 30 } },
+  positionAfter: { score: { cp: 32 } },
+  bestMoves: [],
+  opponentReply: [],
+  motifs: [],
+};
+
+function userText(request: ReturnType<typeof buildExplainRequest>): string {
+  return request.messages[0].content as string;
+}
+
+describe("buildExplainRequest", () => {
+  it("uses the chosen model with a server-side refusal fallback", () => {
+    const request = buildExplainRequest(GRADE, ["e4"], { model: "claude-opus-5-5", perspective: "mine" }, "medium");
+    expect(request.model).toBe("claude-opus-5-5");
+    expect(request.fallbacks).toBe("default");
+    expect(request.betas).toEqual(["server-side-fallback-2026-07-01"]);
+  });
+
+  it("sends no fallback settings for Haiku, which has no server-side fallback", () => {
+    const request = buildExplainRequest(GRADE, ["e4"], { model: "claude-haiku-5-5", perspective: "mine" }, "medium");
+    expect(request).not.toHaveProperty("fallbacks");
+    expect(request).not.toHaveProperty("betas");
+  });
+
+  it("asks about the player's own move", () => {
+    const request = buildExplainRequest(GRADE, ["e4"], { model: "claude-sonnet-5-5", perspective: "mine" }, "medium");
+    expect(userText(request)).toMatch(/^Explain my move 1\.\.\. e5 \(I am Black\)\./);
+  });
+
+  it("asks about the opponent's move from the player's side", () => {
+    const request = buildExplainRequest(GRADE, ["e4"], { model: "claude-sonnet-5-5", perspective: "opponent" }, "medium");
+    expect(userText(request)).toMatch(/^Explain my opponent's move 1\.\.\. e5\. My opponent is Black; I am White\./);
+    expect(userText(request)).toContain("written from Black's side");
+  });
+});
 
 function apiError(status: number, message: string) {
   return Anthropic.APIError.generate(status, { type: "error", error: { type: "x", message } }, undefined, new Headers());

@@ -3,9 +3,18 @@ import path from "node:path";
 import { Chess } from "chess.js";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { z } from "zod";
-import type { BotMoveResponse, BotRating, MoveGrade, StatusResponse } from "../shared/types";
+import {
+  COACH_MODELS,
+  type BotMoveResponse,
+  type BotRating,
+  type MoveGrade,
+  type PositionEval,
+  type StatusResponse,
+} from "../shared/types";
+import { CachedAnalyzer } from "./analysis/cache";
 import { gradeMove, type Analyzer } from "./analysis/grade";
 import { opponent, toMoveInput } from "./analysis/motifs";
+import { evaluatePosition } from "./analysis/position";
 import { MAX_PLAYABLE_RATING, MIN_PLAYABLE_RATING } from "./bot/strength";
 import { CoachError, type Coach } from "./coach";
 
@@ -18,7 +27,7 @@ export interface AppDeps {
   analyzer: Analyzer & EngineConnection;
   /** A separate connection for bot moves, so the bot never waits behind grading. */
   bot: EngineConnection & { move(fen: string, rating: BotRating): Promise<string | null> };
-  coach: Pick<Coach, "configured" | "model" | "explain">;
+  coach: Pick<Coach, "configured" | "defaultModel" | "explain">;
   analysisDepth: number;
   /** Built client to serve, if it exists. */
   distDir?: string;
@@ -62,7 +71,7 @@ function positionProblem(value: string): string | null {
   return null;
 }
 
-function parse<T>(schema: z.ZodType<T>, body: unknown): T {
+function parse<S extends z.ZodTypeAny>(schema: S, body: unknown): z.output<S> {
   const result = schema.safeParse(body ?? {});
   if (!result.success) {
     throw new BadRequest(
@@ -72,7 +81,10 @@ function parse<T>(schema: z.ZodType<T>, body: unknown): T {
   return result.data;
 }
 
-export function createApp({ analyzer, bot, coach, analysisDepth, distDir }: AppDeps) {
+export function createApp({ analyzer: engine, bot, coach, analysisDepth, distDir }: AppDeps) {
+  // The evaluation bar and grading often ask about the same position, so analyses are cached.
+  const analyzer = new CachedAnalyzer(engine);
+  const coachModels = [...new Set<string>([coach.defaultModel, ...COACH_MODELS.map((m) => m.id)])];
   const engineErrors: Record<"analyzer" | "bot", string | undefined> = { analyzer: undefined, bot: undefined };
   const engineError = () => engineErrors.analyzer ?? engineErrors.bot;
 
@@ -96,7 +108,7 @@ export function createApp({ analyzer, bot, coach, analysisDepth, distDir }: AppD
       engine: { ready: !engineError(), error: engineError() },
       coach: {
         ready: coach.configured,
-        model: coach.model,
+        defaultModel: coach.defaultModel,
         error: coach.configured ? undefined : "Add ANTHROPIC_API_KEY to .env and restart the server.",
       },
     };
@@ -123,15 +135,26 @@ export function createApp({ analyzer, bot, coach, analysisDepth, distDir }: AppD
     res.json(grade satisfies MoveGrade);
   });
 
+  app.post("/api/eval", async (req, res) => {
+    const body = parse(z.object({ fen }), req.body);
+    const result = await withEngine("analyzer", () => evaluatePosition(analyzer, body.fen, analysisDepth));
+    res.json(result satisfies PositionEval);
+  });
+
   app.post("/api/explain", async (req, res) => {
     const body = parse(
       z.object({
         grade: z.custom<MoveGrade>((v) => typeof v === "object" && v !== null, "Required"),
         history: z.array(z.string()),
+        model: z
+          .string()
+          .refine((id) => coachModels.includes(id), `Must be one of ${coachModels.join(", ")}`)
+          .default(coach.defaultModel),
+        perspective: z.enum(["mine", "opponent"]).default("mine"),
       }),
       req.body,
     );
-    res.json(await coach.explain(body.grade, body.history));
+    res.json(await coach.explain(body.grade, body.history, { model: body.model, perspective: body.perspective }));
   });
 
   app.use("/api", (_req, res) => {
@@ -160,7 +183,7 @@ export function createApp({ analyzer, bot, coach, analysisDepth, distDir }: AppD
   });
 
   const checkEngine = () =>
-    Promise.all([withEngine("analyzer", () => analyzer.warmUp()), withEngine("bot", () => bot.warmUp())]);
+    Promise.all([withEngine("analyzer", () => engine.warmUp()), withEngine("bot", () => bot.warmUp())]);
   return { app, checkEngine, engineError };
 }
 

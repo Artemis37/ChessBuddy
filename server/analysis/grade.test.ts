@@ -37,6 +37,8 @@ describe("gradeMove", () => {
     expect(grade.mover).toBe("w");
     expect(grade.evalBefore).toBe("+0.40");
     expect(grade.evalAfter).toBe("+0.38");
+    expect(grade.positionBefore).toEqual({ score: { cp: 40 } });
+    expect(grade.positionAfter).toEqual({ score: { cp: 38 } });
     expect(grade.bestMoves.map((m) => m.san)).toEqual(["Bb5", "Bc4", "d4"]);
     expect(grade.bestMoves[0].line).toEqual(["Bb5", "a6", "Ba4"]);
     expect(grade.opponentReply).toEqual(["a6", "Ba4"]);
@@ -73,6 +75,9 @@ describe("gradeMove", () => {
     expect(grade.classification).toBe("best");
     expect(grade.evalAfter).toBe("#");
     expect(grade.winAfter).toBe(100);
+    // Black delivered mate, so from White's side the game is lost.
+    expect(grade.positionBefore).toEqual({ score: { mate: -1 } });
+    expect(grade.positionAfter).toEqual({ score: { mate: 0 }, outcome: "black" });
     expect(grade.motifs).toEqual(["Your move is checkmate."]);
   });
 

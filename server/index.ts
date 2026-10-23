@@ -32,7 +32,7 @@ const { app, checkEngine, engineError } = createApp({
 
 app.listen(PORT, () => {
   console.log(`ChessBuddy server on http://localhost:${PORT}`);
-  console.log(coach.configured ? `Coach: ${coach.model}` : "Coach: no ANTHROPIC_API_KEY yet (Explain is disabled)");
+  console.log(coach.configured ? `Coach: ${coach.defaultModel} (default)` : "Coach: no ANTHROPIC_API_KEY yet (Explain is disabled)");
   checkEngine().then(
     () => console.log("Engine: ready"),
     () => console.error(`Engine: ${engineError()}`),

@@ -2,11 +2,12 @@
 
 A local chess learning app. Play Stockfish or play both sides yourself; every move of your color is graded by the engine, and an **Explain** button has Claude walk you through why the move was good or bad.
 
-- **Play the bot**: pick your color and a bot rating from 400 to 2600 (an estimate on the Chess.com scale) or full-strength Stockfish. Only your moves are graded.
-- **Play both sides**: you move both colors; only the color you pick as "My color" is graded.
-- **Move review**: grade (Best / Excellent / Good / Inaccuracy / Mistake / Blunder), evaluation and winning chances before and after, the engine's best move and line, the opponent's best reply, and facts such as hanging pieces, material lost, or missed mates.
-- **Explain this move**: Claude (Sonnet 5.5 by default) explains the move using only those engine facts, so it doesn't invent lines.
-- **Show on board** draws your move (orange) and the engine's best move (green). **Retry this move** takes the move back so you can find a better one.
+- **Play the bot**: pick your color and a bot rating from 400 to 2600 (an estimate on the Chess.com scale) or full-strength Stockfish. Your moves are graded automatically.
+- **Play both sides**: you move both colors; the color you pick as "My color" is graded automatically.
+- **Chess.com-style board**: drag a piece or click it and then a target square. Dots show where it can go, rings show captures, and the square you picked it up from turns yellow. Player bars show captured pieces and the material lead (+1, +2, …), and an evaluation bar sits on the left. **Flip board** turns the board around; **Undo** takes back your last move (and the bot's reply).
+- **Move review**: grade (Best / Excellent / Good / Inaccuracy / Mistake / Blunder), evaluation and winning chances before and after, the engine's best move and line, the best reply, and facts such as hanging pieces, material lost, or missed mates. Click any move in the list to review it; for the other side's moves, **Analyze this move** grades it on request.
+- **Explain this move**: Claude explains the move, yours or your opponent's, using only those engine facts, so it doesn't invent lines. Pick the model next to the button: Sonnet 5.5 (default), Opus 5.5 (most thorough) or Haiku 5.5 (fastest and cheapest).
+- **Show on board** draws the move (orange) and the engine's best move (green). **Retry this move** takes the move back so you can find a better one.
 
 ## How it works
 
@@ -19,7 +20,9 @@ React (Vite) ──/api──► Node + Express ──MCP over stdio──► mc
 - `server/engine/mcpEngine.ts`: MCP client for [sonirico/mcp-stockfish](https://github.com/sonirico/mcp-stockfish), started with `docker run -i`. The server starts a fresh Stockfish for every tool call, so each call sends all its UCI commands at once (`setoption …`, `position …`, `go …`).
 - Two engine connections (two containers) run side by side: one grades your moves, the other plays the bot's moves. mcp-stockfish answers one request at a time, so with a single connection the bot's reply would wait behind the grade.
 - `server/analysis/`: grading. Winning chances use the Lichess formula; the grade comes from how much your winning chances dropped compared with the engine's best move (under 2 points is Excellent, under 5 Good, under 10 Inaccuracy, under 20 Mistake, 20 or more Blunder). The facts list (hanging pieces, material swings, mates) is computed with chess.js.
-- `server/coach.ts`: one Claude call per Explain click with structured JSON output.
+- `server/coach.ts`: one Claude call per Explain click with structured JSON output, using the model picked in the app.
+- `client/src/board/`: the board, evaluation bar and player bars. Legal moves come from chess.js in the browser, so the dots appear instantly without asking the engine. The evaluation bar reuses grades where it can and otherwise asks `/api/eval`; the server caches analyses so the bar and grading don't search the same position twice.
+- Pieces: the "Staunty" set by sadsnake1 from [Lichess](https://github.com/lichess-org/lila), licensed [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) (free for non-commercial use with credit). Chess.com's own pieces are their artwork and aren't used.
 - `server/bot/`: the bot's strength. Stockfish's own Elo setting is calibrated against engines, not people, and stops at 1320, so the bot weakens itself instead. It searches less deeply at lower ratings, picks randomly among the engine's top moves (worse moves get likelier as the rating drops), and at low ratings sometimes plays a random move, the way beginners hang pieces.
 
 ### Bot ratings are estimates
@@ -67,7 +70,7 @@ Then open http://localhost:3001.
 | Variable | Default | Meaning |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | none | Needed for Explain |
-| `COACH_MODEL` | `claude-sonnet-5-5` | Claude model used for explanations |
+| `COACH_MODEL` | `claude-sonnet-5-5` | Default model for explanations (you can switch in the app) |
 | `COACH_EFFORT` | `medium` | `low`, `medium` or `high`: more effort means deeper but slower explanations |
 | `ANALYSIS_DEPTH` | `16` | Stockfish search depth used for grading |
 | `STOCKFISH_IMAGE` | `chessbuddy/mcp-stockfish` | Docker image of the engine server |
