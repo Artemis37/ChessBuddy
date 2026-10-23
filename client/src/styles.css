@@ -1,13 +1,18 @@
-/* Colors follow chess.com's dark theme and green board. */
+/* Colors follow chess.com's dark theme and green board (measured from chess.com screenshots). */
 :root {
   --bg: #302e2b;
   --surface: #262522;
   --surface-2: #3c3a37;
   --surface-3: #45423e;
-  --row-alt: #2a2926;
+  --row-alt: #2b2927;
+  --selected: #484745;
+  --nav-strip: #21201e;
+  --nav-button: #2e2d2b;
   --text: #ffffff;
-  --muted: #989795;
+  --text-body: #c3c2c2;
+  --muted: #8d8c8b;
   --border: #3c3a37;
+  --topbar-height: 48px;
   --green: #81b64c;
   --green-edge: #45753c;
   --error: #fa6a5b;
@@ -15,6 +20,9 @@
   --square-dark: #739552;
   --highlight-light: #f5f682;
   --highlight-dark: #b9ca43;
+  /* chess.com's red square marking, rgba(235, 97, 80, 0.8), over each square color. */
+  --premove-light: #eb7d6a;
+  --premove-dark: #d36b50;
   --best: #96bc4b;
   --excellent: #96bc4b;
   --good: #96af8b;
@@ -36,8 +44,16 @@ html {
 body {
   margin: 0;
   background: var(--bg);
+  color: var(--text-body);
+  /* chess.com uses the system UI font: Segoe UI on Windows, San Francisco on macOS. */
+  font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+strong {
   color: var(--text);
-  font: 15px/1.5 "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
 }
 
 button,
@@ -48,6 +64,7 @@ select {
 
 button {
   border: 0;
+  color: var(--text);
   background: var(--surface-2);
   border-radius: 6px;
   padding: 7px 12px;
@@ -95,11 +112,15 @@ select {
 /* Header */
 
 .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+  min-height: var(--topbar-height);
   padding: 8px 20px;
   background: var(--surface);
 }
@@ -153,14 +174,25 @@ select {
   gap: 24px;
   justify-content: center;
   align-items: flex-start;
-  padding: 16px 20px;
+  padding: 0 20px 16px;
+}
+
+/* Keeps the board in the middle of the window while the side panel scrolls. */
+.board-dock {
+  position: sticky;
+  top: var(--topbar-height);
+  height: calc(100vh - var(--topbar-height));
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  flex: 0 1 auto;
+  /* Fit the board to the window height, as chess.com does, leaving room for the player bars. */
+  width: min(780px, calc(100vh - 210px));
+  min-width: 300px;
 }
 
 .board-col {
-  flex: 0 1 auto;
-  /* Fit the board to the window height, as chess.com does, leaving room for the player bars. */
-  width: min(780px, calc(100vh - 200px), 100%);
-  min-width: 300px;
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -182,6 +214,7 @@ select {
   flex-direction: column;
   gap: 12px;
   min-width: 0;
+  padding-top: 16px;
 }
 
 @media (max-width: 1000px) {
@@ -191,9 +224,15 @@ select {
     padding: 12px 16px;
   }
 
-  .board-col {
+  .board-dock {
+    position: static;
+    height: auto;
     width: 100%;
     min-width: 0;
+  }
+
+  .side-col {
+    padding-top: 0;
   }
 
   .side-col {
@@ -246,6 +285,14 @@ select {
   background: var(--highlight-dark);
 }
 
+.sq.light.premove {
+  background: var(--premove-light);
+}
+
+.sq.dark.premove {
+  background: var(--premove-dark);
+}
+
 .sq.grab {
   cursor: grab;
 }
@@ -293,7 +340,8 @@ select {
 }
 
 .piece.slide {
-  animation: slide 150ms ease-out;
+  z-index: 2;
+  animation: slide 180ms ease-out;
 }
 
 @keyframes slide {
@@ -455,6 +503,7 @@ select {
 
 .player-name {
   font-weight: 700;
+  color: var(--text);
   display: flex;
   align-items: baseline;
   gap: 6px;
@@ -615,45 +664,45 @@ select {
 /* Move list */
 
 .moves {
-  padding: 14px 0 8px;
+  padding: 0;
+  overflow: hidden;
 }
 
-.moves h2,
-.moves > .muted {
-  padding: 0 16px;
+.opening,
+.game-title {
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--border);
 }
 
-.move-head,
-.move-row {
-  display: grid;
-  grid-template-columns: 44px 1fr 1fr;
-  align-items: center;
+.opening {
+  font-size: 14px;
+  color: var(--text-body);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.move-head {
-  padding: 0 0 4px;
-  font-size: 12px;
-  color: var(--muted);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+.game-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
 }
 
-.move-head span {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding-left: 8px;
-}
-
-.move-head img {
-  width: 16px;
-  height: 16px;
+.game-title .score {
+  font-weight: 400;
 }
 
 .move-table {
-  max-height: 240px;
+  min-height: 180px;
+  max-height: 300px;
   overflow-y: auto;
+}
+
+.move-row {
+  display: grid;
+  grid-template-columns: 52px 100px 100px;
+  align-items: center;
+  min-height: 30px;
 }
 
 .move-row:nth-child(even) {
@@ -662,24 +711,73 @@ select {
 
 .move-no {
   color: var(--muted);
-  font-size: 13px;
+  font-weight: 700;
+  font-size: 14px;
   padding-left: 16px;
 }
 
 .move-cell {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  width: calc(100% - 8px);
+  gap: 5px;
   background: transparent;
-  padding: 3px 8px;
+  color: var(--text-body);
+  padding: 2px 5px;
   border-radius: 3px;
-  text-align: left;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 700;
 }
 
-.move-cell.selected {
-  background: #484644;
+.move-cell:hover:not(:disabled) {
+  background: transparent;
+  color: var(--text);
+}
+
+.move-cell.selected,
+.move-cell.selected:hover:not(:disabled) {
+  background: var(--selected);
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 rgba(255, 255, 255, 0.12);
+}
+
+.move-nav {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  padding: 8px;
+  background: var(--nav-strip);
+}
+
+.move-nav button {
+  display: grid;
+  place-items: center;
+  height: 44px;
+  background: var(--nav-button);
+  border-radius: 6px;
+  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.25);
+}
+
+.move-nav button:hover:not(:disabled) {
+  background: #3a3936;
+}
+
+.move-nav button:disabled {
+  opacity: 1;
+  background: #2a2927;
+}
+
+.move-nav svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: #c6c6c6;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.move-nav button:disabled svg {
+  stroke: #737271;
 }
 
 .badge {

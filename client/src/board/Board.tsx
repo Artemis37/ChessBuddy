@@ -1,7 +1,16 @@
 import { Chess, type PieceSymbol, type Square } from "chess.js";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from "react";
 import type { Color } from "../../../shared/types";
 import { cellOf, displaySquares, isLightSquare, squareAtPoint } from "./geometry";
+import {
+  castlingOf,
+  movedPieces,
+  placementOf,
+  premoveTargets,
+  withPremoves,
+  type Placement,
+  type Premove,
+} from "./placement";
 
 export interface BoardArrow {
   from: Square;
@@ -14,11 +23,14 @@ interface Props {
   orientation: Color;
   /** The color the user may move right now, or null when the board is read-only. */
   movable: Color | null;
+  /** The color the user may premove while the opponent is thinking, or null. */
+  premoveColor: Color | null;
+  premoves: Premove[];
   lastMove: { from: Square; to: Square } | null;
-  /** Slide the last move's piece into place; set when a new move arrives from outside the board. */
-  animateLastMove: boolean;
   arrows?: BoardArrow[];
   onMove: (from: Square, to: Square, promotion?: PieceSymbol) => boolean;
+  onPremove: (premove: Premove) => void;
+  onCancelPremoves: () => void;
 }
 
 export function pieceUrl(color: Color, type: PieceSymbol): string {
@@ -36,12 +48,29 @@ interface Drag {
   deselectOnRelease: boolean;
 }
 
+/** Pieces sliding into place: destination square -> offset (in % of a square) it starts from. */
+type Slides = Map<Square, { dx: number; dy: number }>;
+
 /**
  * Chess board styled after chess.com. Pieces move by dragging or by clicking the piece and
- * then a target square; legal targets come from chess.js and are shown as dots, captures
- * as rings. Uses pointer events rather than HTML drag and drop, so there is no drag ghost.
+ * then a target square; legal targets come from chess.js and show as dots, captures as
+ * rings. While the opponent thinks, moves are queued as premoves (shown in red) and the
+ * board shows where the premoved pieces will stand. Every change of position slides the
+ * moved pieces into place. Uses pointer events rather than HTML drag and drop, so there
+ * is no drag ghost.
  */
-export function Board({ fen, orientation, movable, lastMove, animateLastMove, arrows = [], onMove }: Props) {
+export function Board({
+  fen,
+  orientation,
+  movable,
+  premoveColor,
+  premoves,
+  lastMove,
+  arrows = [],
+  onMove,
+  onPremove,
+  onCancelPremoves,
+}: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState(0);
   const [selected, setSelected] = useState<Square | null>(null);
@@ -50,12 +79,16 @@ export function Board({ fen, orientation, movable, lastMove, animateLastMove, ar
   const [promotion, setPromotion] = useState<{ from: Square; to: Square; color: Color; dropped: boolean } | null>(
     null,
   );
-  const [slide, setSlide] = useState<{ to: Square; dx: number; dy: number; key: string } | null>(null);
+  const [slides, setSlides] = useState<{ moves: Slides; key: number }>({ moves: new Map(), key: 0 });
   /** The last move made by dropping a piece; it is already in place and needs no animation. */
   const dropped = useRef<string | null>(null);
+  const previous = useRef<{ placement: Placement; orientation: Color } | null>(null);
 
   const chess = useMemo(() => new Chess(fen), [fen]);
+  const placement = useMemo(() => withPremoves(placementOf(fen), premoves), [fen, premoves]);
+  const placementKey = [...placement].map(([s, p]) => `${s}${p.color}${p.type}`).join();
   const squareSize = size / 8;
+  const premoving = movable === null && premoveColor !== null;
 
   useLayoutEffect(() => {
     const element = ref.current;
@@ -67,38 +100,48 @@ export function Board({ fen, orientation, movable, lastMove, animateLastMove, ar
     return () => observer.disconnect();
   }, []);
 
-  useEffect(() => {
-    setSelected(null);
-    setDrag(null);
-    setHover(null);
-    setPromotion(null);
-  }, [fen, movable, orientation]);
-
+  // Slide every piece that moved since the last render; flipping the board only redraws.
   useLayoutEffect(() => {
-    if (!animateLastMove || !lastMove) {
-      setSlide(null);
-      return;
+    const before = previous.current;
+    previous.current = { placement, orientation };
+    if (!before || before.orientation !== orientation) return;
+    const moves: Slides = new Map();
+    for (const { from, to } of movedPieces(before.placement, placement)) {
+      if (dropped.current === `${from}${to}`) continue;
+      const a = cellOf(from, orientation);
+      const b = cellOf(to, orientation);
+      moves.set(to, { dx: (a.col - b.col) * 100, dy: (a.row - b.row) * 100 });
     }
-    const key = `${lastMove.from}${lastMove.to}`;
-    if (dropped.current === key) {
-      dropped.current = null;
-      setSlide(null);
-      return;
-    }
-    const from = cellOf(lastMove.from, orientation);
-    const to = cellOf(lastMove.to, orientation);
-    setSlide({ to: lastMove.to, dx: (from.col - to.col) * 100, dy: (from.row - to.row) * 100, key: fen });
-    // Only a new position starts an animation, so the other inputs are read but not watched.
-  }, [fen]);
+    dropped.current = null;
+    if (moves.size > 0) setSlides((s) => ({ moves, key: s.key + 1 }));
+  }, [placementKey, orientation]);
+
+  // A new position or orientation ends any selection, but not a drag in progress.
+  useLayoutEffect(() => {
+    if (!drag) setSelected(null);
+    setPromotion(null);
+  }, [fen, orientation, movable, premoveColor]);
+
+  /** Who may pick up pieces now: real moves on your turn, premoves on the opponent's. */
+  const actingColor = movable ?? premoveColor;
 
   const targets = useMemo(() => {
-    if (!selected) return new Map<Square, boolean>();
-    return new Map(chess.moves({ square: selected, verbose: true }).map((m) => [m.to as Square, Boolean(m.captured)]));
-  }, [chess, selected]);
+    const result = new Map<Square, boolean>();
+    if (!selected) return result;
+    if (movable) {
+      for (const m of chess.moves({ square: selected, verbose: true })) result.set(m.to as Square, Boolean(m.captured));
+    } else if (premoveColor) {
+      for (const square of premoveTargets(placement, selected, castlingOf(fen))) {
+        result.set(square, placement.get(square)?.color === (premoveColor === "w" ? "b" : "w"));
+      }
+    }
+    return result;
+  }, [chess, placement, fen, selected, movable, premoveColor]);
 
   function canPick(square: Square): boolean {
-    const piece = chess.get(square);
-    return Boolean(movable && piece && piece.color === movable && piece.color === chess.turn());
+    const piece = placement.get(square);
+    if (!piece || !actingColor || piece.color !== actingColor) return false;
+    return movable ? piece.color === chess.turn() : true;
   }
 
   function pointIn(event: PointerEvent): { x: number; y: number } {
@@ -107,7 +150,13 @@ export function Board({ fen, orientation, movable, lastMove, animateLastMove, ar
   }
 
   function tryMove(from: Square, to: Square, wasDropped: boolean) {
-    const piece = chess.get(from);
+    if (premoving) {
+      onPremove({ from, to });
+      dropped.current = wasDropped ? `${from}${to}` : null;
+      setSelected(null);
+      return;
+    }
+    const piece = placement.get(from);
     if (piece?.type === "p" && (to[1] === "8" || to[1] === "1")) {
       setPromotion({ from, to, color: piece.color, dropped: wasDropped });
       return;
@@ -122,7 +171,14 @@ export function Board({ fen, orientation, movable, lastMove, animateLastMove, ar
   }
 
   function onPointerDown(event: PointerEvent<HTMLDivElement>) {
-    if (event.button !== 0 || promotion) return;
+    if (promotion) return;
+    if (event.button === 2) {
+      // Right-click cancels premoves, as on chess.com.
+      setSelected(null);
+      onCancelPremoves();
+      return;
+    }
+    if (event.button !== 0) return;
     const { x, y } = pointIn(event);
     const square = squareAtPoint(x, y, size, orientation);
     if (!square) return;
@@ -142,6 +198,7 @@ export function Board({ fen, orientation, movable, lastMove, animateLastMove, ar
       setHover(square);
       return;
     }
+    if (!selected && premoves.length > 0) onCancelPremoves();
     setSelected(null);
   }
 
@@ -167,7 +224,8 @@ export function Board({ fen, orientation, movable, lastMove, animateLastMove, ar
     }
   }
 
-  const draggedPiece = drag ? chess.get(drag.from) : undefined;
+  const draggedPiece = drag ? placement.get(drag.from) : undefined;
+  const premoveSquares = new Set(premoves.flatMap((p) => [p.from, p.to]));
   const boardStyle = { "--sq": `${squareSize}px` } as CSSProperties;
 
   return (
@@ -186,15 +244,18 @@ export function Board({ fen, orientation, movable, lastMove, animateLastMove, ar
     >
       {displaySquares(orientation).map((square) => {
         const { col, row } = cellOf(square, orientation);
-        const piece = chess.get(square);
+        const piece = placement.get(square);
         const target = targets.get(square);
+        const slide = slides.moves.get(square);
+        const premoved = premoveSquares.has(square);
         const highlighted =
-          square === selected || square === lastMove?.from || square === lastMove?.to || square === drag?.from;
-        const sliding = slide?.to === square;
+          !premoved &&
+          (square === selected || square === lastMove?.from || square === lastMove?.to || square === drag?.from);
         const classes = [
           "sq",
           isLightSquare(square) ? "light" : "dark",
           highlighted ? "highlight" : "",
+          premoved ? "premove" : "",
           drag && hover === square ? "hover" : "",
           canPick(square) ? "grab" : "",
         ];
@@ -204,10 +265,10 @@ export function Board({ fen, orientation, movable, lastMove, animateLastMove, ar
             {row === 7 && <span className="coord file">{square[0]}</span>}
             {piece && drag?.from !== square && (
               <img
-                key={sliding ? slide.key : square}
-                className={`piece ${sliding ? "slide" : ""}`}
+                key={slide ? `${square}-${slides.key}` : square}
+                className={`piece ${slide ? "slide" : ""}`}
                 src={pieceUrl(piece.color, piece.type)}
-                style={sliding ? ({ "--dx": `${slide.dx}%`, "--dy": `${slide.dy}%` } as CSSProperties) : undefined}
+                style={slide ? ({ "--dx": `${slide.dx}%`, "--dy": `${slide.dy}%` } as CSSProperties) : undefined}
                 alt=""
                 draggable={false}
               />

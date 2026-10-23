@@ -1,19 +1,23 @@
 import { Chess, type Square } from "chess.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { openingFor, type OpeningBook } from "../../shared/openings";
 import { COACH_MODELS, type Color, type PositionEval, type StatusResponse } from "../../shared/types";
 import { api } from "./api";
 import { Board, type BoardArrow } from "./board/Board";
 import { EvalBar } from "./board/EvalBar";
 import { capturedBy, materialBalance } from "./board/material";
+import type { Premove } from "./board/placement";
 import { PlayerBar } from "./board/PlayerBar";
 import { MoveList } from "./components/MoveList";
 import { MovePanel } from "./components/MovePanel";
 import { SetupCard } from "./components/SetupCard";
-import { colorName, moveNumber, type PlayedMove, type Settings } from "./game";
+import { colorName, type PlayedMove, type Settings } from "./game";
 
-const PLAYED_ARROW = "rgba(232, 150, 30, 0.9)";
+const START_FEN = new Chess().fen();
 const BEST_ARROW = "rgba(129, 182, 76, 0.95)";
 const BOT_MIN_THINK_MS = 400;
+/** Pause before a premove is played, so the opponent's move is seen first. */
+const PREMOVE_DELAY_MS = 120;
 const MODEL_KEY = "chessbuddy.coachModel";
 
 function toMove(uci: string) {
@@ -33,6 +37,12 @@ function resultText(game: Chess): string | null {
   return null;
 }
 
+function scoreText(game: Chess): string {
+  if (game.isCheckmate()) return game.turn() === "w" ? "0-1" : "1-0";
+  if (game.isDraw() || game.isStalemate()) return "½-½";
+  return "*";
+}
+
 function lastGradedIndex(moves: PlayedMove[]): number | null {
   for (let i = moves.length - 1; i >= 0; i--) if (moves[i].graded) return i;
   return null;
@@ -50,15 +60,16 @@ export function App() {
   const [draft, setDraft] = useState<Settings>({ mode: "bot", myColor: "w", rating: 1000 });
   const [settings, setSettings] = useState<Settings>(draft);
   const [moves, setMoves] = useState<PlayedMove[]>([]);
-  const [selected, setSelected] = useState<number | null>(null);
+  /** Number of moves shown on the board while stepping through the game; null follows the game. */
+  const [viewPly, setViewPly] = useState<number | null>(null);
+  const [premoves, setPremoves] = useState<Premove[]>([]);
   const [flipped, setFlipped] = useState(false);
   const [botThinking, setBotThinking] = useState(false);
   const [botError, setBotError] = useState<string | null>(null);
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [chosenModel, setChosenModel] = useState(loadModel);
   const [evals, setEvals] = useState<Record<string, PositionEval>>({});
-  /** Move count right after a new move, so only that move slides into place. */
-  const [animateAt, setAnimateAt] = useState(-1);
+  const [book, setBook] = useState<OpeningBook | null>(null);
   const nextId = useRef(1);
   /** Bumped whenever the move list is rewritten, so late bot replies are dropped. */
   const gameToken = useRef(0);
@@ -72,6 +83,7 @@ export function App() {
   const fen = game.fen();
   const turn = game.turn();
   const result = resultText(game);
+  const live = viewPly === null || viewPly >= moves.length;
   const humanTurn = settings.mode === "both" || turn === settings.myColor;
   const coachModel =
     chosenModel && COACH_MODELS.some((m) => m.id === chosenModel)
@@ -91,6 +103,12 @@ export function App() {
       alive = false;
       clearInterval(timer);
     };
+  }, []);
+
+  useEffect(() => {
+    fetch("/openings.json")
+      .then((r) => r.json())
+      .then(setBook, () => setBook({}));
   }, []);
 
   const updateMove = useCallback((id: number, patch: Partial<PlayedMove>) => {
@@ -128,12 +146,10 @@ export function App() {
         graded: made.color === settings.myColor,
       };
       setMoves((list) => [...list, move]);
-      setAnimateAt(moves.length + 1);
-      setSelected(null);
       if (move.graded) grade(move);
       return true;
     },
-    [fen, moves.length, settings.myColor, grade],
+    [fen, settings.myColor, grade],
   );
 
   // The bot replies whenever it is its turn.
@@ -159,22 +175,37 @@ export function App() {
     // `play` changes with every move; the position (fen) already covers that.
   }, [fen, turn, result, settings, botError]);
 
+  // Once it is your turn again, play the first queued premove; if it is illegal now, drop them all.
+  useEffect(() => {
+    if (premoves.length === 0 || result || turn !== settings.myColor || settings.mode !== "bot") return;
+    const timer = setTimeout(() => {
+      const [next, ...rest] = premoves;
+      const board = new Chess(fen);
+      const legal = board
+        .moves({ square: next.from, verbose: true })
+        .find((m) => m.to === next.to && (!m.promotion || m.promotion === "q"));
+      if (legal && play(legal.lan)) setPremoves(rest);
+      else setPremoves([]);
+    }, PREMOVE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [premoves, fen, turn, result, settings, play]);
+
   const rewind = (count: number) => {
     gameToken.current++;
     setMoves((list) => list.slice(0, list.length - count));
-    setSelected(null);
+    setViewPly(null);
+    setPremoves([]);
     setBotError(null);
-    setAnimateAt(-1);
   };
 
   const newGame = () => {
     gameToken.current++;
     setSettings(draft);
     setMoves([]);
-    setSelected(null);
+    setViewPly(null);
+    setPremoves([]);
     setFlipped(false);
     setBotError(null);
-    setAnimateAt(-1);
   };
 
   const retry = (index: number) => rewind(moves.length - index);
@@ -186,6 +217,32 @@ export function App() {
     const last = moves[moves.length - 1];
     rewind(settings.mode === "bot" && last.color !== settings.myColor ? 2 : 1);
   };
+
+  /** Shows the position after `ply` moves; the last position resumes the game. */
+  const goTo = useCallback(
+    (ply: number) => {
+      const clamped = Math.max(0, Math.min(moves.length, ply));
+      setViewPly(clamped >= moves.length ? null : clamped);
+      if (clamped < moves.length) setPremoves([]);
+    },
+    [moves.length],
+  );
+  const shownCount = live ? moves.length : viewPly!;
+
+  // Arrow keys step through the game, as on chess.com.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement;
+      if (["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName)) return;
+      const steps: Record<string, number> = { ArrowLeft: shownCount - 1, ArrowRight: shownCount + 1, Home: 0 };
+      if (event.key === "End") goTo(moves.length);
+      else if (event.key in steps) goTo(steps[event.key]);
+      else return;
+      event.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [goTo, shownCount, moves.length]);
 
   const explain = (index: number) => {
     const move = moves[index];
@@ -207,11 +264,9 @@ export function App() {
     }
   };
 
-  const reviewing = selected !== null && moves[selected] !== undefined;
-  const shown = reviewing ? moves[selected] : null;
-  const shownCount = reviewing ? selected : moves.length;
-  const displayFen = shown ? shown.fenBefore : fen;
-  const panelIndex = reviewing ? selected : lastGradedIndex(moves);
+  const displayFen = shownCount === 0 ? START_FEN : moves[shownCount - 1].fenAfter;
+  const shownMove = shownCount > 0 ? moves[shownCount - 1] : null;
+  const panelIndex = live ? lastGradedIndex(moves) : shownCount - 1;
 
   // Evaluation bar: reuse grades where possible, otherwise ask the engine once per position.
   const gradeEvals = useMemo(() => {
@@ -234,28 +289,27 @@ export function App() {
     );
   }, [displayFen, evaluation, gradeComing]);
 
+  const opening = book ? openingFor(moves.slice(0, shownCount).map((m) => m.fenAfter), book) : null;
   const orientation: Color = flipped ? other(settings.myColor) : settings.myColor;
   const captured = capturedBy(moves.slice(0, shownCount));
   const balance = materialBalance(displayFen);
-  const lastShown = shownCount > 0 ? toMove(moves[shownCount - 1].uci) : null;
 
   const arrows: BoardArrow[] = [];
-  if (shown) {
-    const played = toMove(shown.uci);
-    arrows.push({ from: played.from, to: played.to, color: PLAYED_ARROW });
-    const best = shown.grade?.bestMoves[0];
-    if (best && best.uci !== shown.uci) {
-      const bestMove = toMove(best.uci);
-      arrows.push({ from: bestMove.from, to: bestMove.to, color: BEST_ARROW });
-    }
+  const best = !live && shownMove?.grade && !shownMove.grade.isBest ? shownMove.grade.bestMoves[0] : undefined;
+  if (best) {
+    const bestMove = toMove(best.uci);
+    arrows.push({ from: bestMove.from, to: bestMove.to, color: BEST_ARROW });
   }
 
-  const movable: Color | null = !reviewing && !result && humanTurn && !botThinking ? turn : null;
+  const movable: Color | null = live && !result && humanTurn && !botThinking ? turn : null;
+  const premoveColor: Color | null =
+    live && !result && settings.mode === "bot" && turn !== settings.myColor ? settings.myColor : null;
   const botLabel = settings.rating === "max" ? "Maximum" : `${settings.rating}`;
 
+  const playerName = (color: Color) =>
+    color === settings.myColor ? "You" : settings.mode === "bot" ? "Stockfish" : colorName(color);
   const playerBar = (color: Color) => {
     const mine = color === settings.myColor;
-    const name = mine ? "You" : settings.mode === "bot" ? "Stockfish" : colorName(color);
     const detail = mine
       ? settings.mode === "both"
         ? colorName(color)
@@ -265,7 +319,7 @@ export function App() {
         : "you move it";
     return (
       <PlayerBar
-        name={name}
+        name={playerName(color)}
         detail={detail}
         color={color}
         captured={captured[color]}
@@ -285,71 +339,74 @@ export function App() {
       </header>
 
       <main className="layout">
-        <section className="board-col">
-          {playerBar(other(orientation))}
-          <div className="board-row">
-            <EvalBar evaluation={evaluation} orientation={orientation} />
-            <div className="board-wrap">
-              <Board
-                fen={displayFen}
-                orientation={orientation}
-                movable={movable}
-                lastMove={lastShown}
-                animateLastMove={!reviewing && animateAt === moves.length}
-                arrows={arrows}
-                onMove={(from, to, promotion) => play(`${from}${to}${promotion ?? ""}`)}
-              />
+        <div className="board-dock">
+          <section className="board-col">
+            {playerBar(other(orientation))}
+            <div className="board-row">
+              <EvalBar evaluation={evaluation} orientation={orientation} />
+              <div className="board-wrap">
+                <Board
+                  fen={displayFen}
+                  orientation={orientation}
+                  movable={movable}
+                  premoveColor={premoveColor}
+                  premoves={live ? premoves : []}
+                  lastMove={shownMove ? toMove(shownMove.uci) : null}
+                  arrows={arrows}
+                  onMove={(from, to, promotion) => play(`${from}${to}${promotion ?? ""}`)}
+                  onPremove={(premove) => setPremoves((list) => [...list, premove])}
+                  onCancelPremoves={() => setPremoves([])}
+                />
+              </div>
             </div>
-          </div>
-          {playerBar(orientation)}
+            {playerBar(orientation)}
 
-          <div className="board-controls">
-            <button onClick={undo} disabled={!canUndo} title="Take back your last move">
-              <span aria-hidden>↶</span> Undo
-            </button>
-            <button onClick={() => setFlipped((f) => !f)} title="Turn the board around">
-              <span aria-hidden>⇅</span> Flip board
-            </button>
-            {reviewing && <button onClick={() => setSelected(null)}>Back to game</button>}
-          </div>
+            <div className="board-controls">
+              <button onClick={undo} disabled={!canUndo} title="Take back your last move">
+                <span aria-hidden>↶</span> Undo
+              </button>
+              <button onClick={() => setFlipped((f) => !f)} title="Turn the board around">
+                <span aria-hidden>⇅</span> Flip board
+              </button>
+            </div>
 
-          {reviewing && shown && (
-            <div className="banner review">
-              Showing the position before {moveNumber(selected)} {shown.san}
-              <span className="legend">
-                <i style={{ background: PLAYED_ARROW }} /> {shown.color === settings.myColor ? "your move" : "move played"}
-                {shown.grade && shown.grade.bestMoves[0]?.uci !== shown.uci && (
-                  <>
-                    <i style={{ background: BEST_ARROW }} /> engine's best
-                  </>
-                )}
-              </span>
-            </div>
-          )}
-          {result && !reviewing && <div className="banner result">{result}</div>}
-          {botError && (
-            <div className="banner error">
-              The bot couldn't move: {botError}
-              <button onClick={() => setBotError(null)}>Try again</button>
-            </div>
-          )}
-        </section>
+            {result && live && <div className="banner result">{result}</div>}
+            {botError && (
+              <div className="banner error">
+                The bot couldn't move: {botError}
+                <button onClick={() => setBotError(null)}>Try again</button>
+              </div>
+            )}
+          </section>
+        </div>
 
         <aside className="side-col">
           <SetupCard draft={draft} onChange={setDraft} onNewGame={newGame} />
-          <MoveList moves={moves} selected={selected} onSelect={(i) => setSelected(i === selected ? null : i)} />
+          <MoveList
+            moves={moves}
+            current={shownCount - 1}
+            opening={opening}
+            white={playerName("w")}
+            black={playerName("b")}
+            score={scoreText(game)}
+            onSelect={(i) => goTo(i + 1)}
+            onFirst={() => goTo(0)}
+            onPrevious={() => goTo(shownCount - 1)}
+            onNext={() => goTo(shownCount + 1)}
+            onLast={() => goTo(moves.length)}
+          />
           <MovePanel
             move={panelIndex === null ? undefined : moves[panelIndex]}
             index={panelIndex}
             myColor={settings.myColor}
-            onBoard={reviewing}
+            onBoard={!live && panelIndex === shownCount - 1}
             coach={status?.coach ?? null}
             model={coachModel}
             onModelChange={chooseModel}
             onExplain={explain}
             onRetry={retry}
             onAnalyze={(i) => grade(moves[i])}
-            onShowOnBoard={(i) => setSelected(i)}
+            onShowOnBoard={(i) => goTo(i + 1)}
           />
         </aside>
       </main>

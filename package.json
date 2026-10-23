@@ -13,7 +13,8 @@
     "start": "tsx server/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "calibrate": "tsx scripts/calibrate-bot.ts"
+    "calibrate": "tsx scripts/calibrate-bot.ts",
+    "openings:build": "tsx scripts/build-openings.ts"
   },
   "engines": {
     "node": ">=20.12"
