@@ -28,6 +28,8 @@ interface Props {
   premoves: Premove[];
   lastMove: { from: Square; to: Square } | null;
   arrows?: BoardArrow[];
+  /** Squares outlined in red, such as a hanging piece in an explanation. */
+  marks?: string[];
   onMove: (from: Square, to: Square, promotion?: PieceSymbol) => boolean;
   onPremove: (premove: Premove) => void;
   onCancelPremoves: () => void;
@@ -67,6 +69,7 @@ export function Board({
   premoves,
   lastMove,
   arrows = [],
+  marks = [],
   onMove,
   onPremove,
   onCancelPremoves,
@@ -79,7 +82,12 @@ export function Board({
   const [promotion, setPromotion] = useState<{ from: Square; to: Square; color: Color; dropped: boolean } | null>(
     null,
   );
-  const [slides, setSlides] = useState<{ moves: Slides; key: number }>({ moves: new Map(), key: 0 });
+  /** The slides of the last position change, for the orientation they were measured in. */
+  const [slides, setSlides] = useState<{ moves: Slides; key: number; orientation: Color }>({
+    moves: new Map(),
+    key: 0,
+    orientation,
+  });
   /** The last move made by dropping a piece; it is already in place and needs no animation. */
   const dropped = useRef<string | null>(null);
   const previous = useRef<{ placement: Placement; orientation: Color } | null>(null);
@@ -104,7 +112,11 @@ export function Board({
   useLayoutEffect(() => {
     const before = previous.current;
     previous.current = { placement, orientation };
-    if (!before || before.orientation !== orientation) return;
+    if (!before) return;
+    if (before.orientation !== orientation) {
+      setSlides((s) => ({ moves: new Map(), key: s.key, orientation }));
+      return;
+    }
     const moves: Slides = new Map();
     for (const { from, to } of movedPieces(before.placement, placement)) {
       if (dropped.current === `${from}${to}`) continue;
@@ -113,7 +125,7 @@ export function Board({
       moves.set(to, { dx: (a.col - b.col) * 100, dy: (a.row - b.row) * 100 });
     }
     dropped.current = null;
-    if (moves.size > 0) setSlides((s) => ({ moves, key: s.key + 1 }));
+    if (moves.size > 0) setSlides((s) => ({ moves, key: s.key + 1, orientation }));
   }, [placementKey, orientation]);
 
   // A new position or orientation ends any selection, but not a drag in progress.
@@ -246,7 +258,8 @@ export function Board({
         const { col, row } = cellOf(square, orientation);
         const piece = placement.get(square);
         const target = targets.get(square);
-        const slide = slides.moves.get(square);
+        // Flipping reorders the squares, which would replay a finished slide; it only redraws.
+        const slide = slides.orientation === orientation ? slides.moves.get(square) : undefined;
         const premoved = premoveSquares.has(square);
         const highlighted =
           !premoved &&
@@ -256,6 +269,7 @@ export function Board({
           isLightSquare(square) ? "light" : "dark",
           highlighted ? "highlight" : "",
           premoved ? "premove" : "",
+          marks.includes(square) ? "marked" : "",
           drag && hover === square ? "hover" : "",
           canPick(square) ? "grab" : "",
         ];

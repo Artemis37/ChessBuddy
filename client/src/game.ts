@@ -1,5 +1,5 @@
 import type { PieceSymbol } from "chess.js";
-import type { BotRating, Color, Explanation, MoveGrade, Classification } from "../../shared/types";
+import type { BotRating, Classification, CoachReply, Color, Explanation, MoveGrade } from "../../shared/types";
 
 export type Mode = "bot" | "both";
 
@@ -26,6 +26,16 @@ export interface PlayedMove {
   explanation?: Explanation;
   explaining?: boolean;
   explainError?: string;
+  /** Follow-up questions about the explanation, with the coach's answers. */
+  thread?: Exchange[];
+  /** The question waiting for an answer, if any. */
+  asking?: string;
+  askError?: string;
+}
+
+export interface Exchange {
+  question: string;
+  reply: CoachReply;
 }
 
 export const CLASSIFICATION: Record<Classification, { label: string; symbol: string }> = {

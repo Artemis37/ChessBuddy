@@ -62,6 +62,7 @@ export async function gradeMove(engine: Analyzer, fenBefore: string, uci: string
         san: sanLine(fenBefore, line.pv.slice(0, 1))[0],
         eval: formatEval(line.score),
         line: sanLine(fenBefore, line.pv.slice(0, LINE_PLIES)),
+        position: { score: toWhite(line.score, mover) },
       })),
     opponentReply: sanLine(fenAfter, opponentLine.slice(0, LINE_PLIES)),
     motifs: [],

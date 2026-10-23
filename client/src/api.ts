@@ -1,7 +1,9 @@
 import type {
   BotMoveResponse,
   BotRating,
+  CoachReply,
   Explanation,
+  FollowUp,
   MoveGrade,
   Perspective,
   PositionEval,
@@ -26,4 +28,13 @@ export const api = {
   evaluate: (fen: string) => request<PositionEval>("/api/eval", { fen }),
   explain: (grade: MoveGrade, history: string[], model: string, perspective: Perspective) =>
     request<Explanation>("/api/explain", { grade, history, model, perspective }),
+  ask: (
+    grade: MoveGrade,
+    history: string[],
+    model: string,
+    perspective: Perspective,
+    explanation: { summary: string; steps: string[]; lesson: string },
+    thread: FollowUp[],
+    question: string,
+  ) => request<CoachReply>("/api/ask", { grade, history, model, perspective, explanation, thread, question }),
 };

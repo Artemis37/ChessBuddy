@@ -17,3 +17,15 @@ export function numberedLine(fen: string, san: string[]): string {
 
   return parts.join(" ");
 }
+
+/** Like numberedLine, but each move carries its own number: ["3... Nf6", "4. Qxf7#"]. */
+export function numberedMoves(fen: string, san: string[]): string[] {
+  const [, side, , , , fullmove] = fen.split(" ");
+  const start = Number(fullmove) || 1;
+  const blackFirst = side === "b";
+  return san.map((move, i) => {
+    const ply = i + (blackFirst ? 1 : 0);
+    const number = start + Math.floor(ply / 2);
+    return ply % 2 === 0 ? `${number}. ${move}` : `${number}... ${move}`;
+  });
+}

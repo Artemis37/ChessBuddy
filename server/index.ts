@@ -30,7 +30,12 @@ const { app, checkEngine, engineError } = createApp({
   distDir: path.resolve("dist"),
 });
 
-app.listen(PORT, () => {
+// Express 5 also calls this when listening fails (for example, the port is taken).
+app.listen(PORT, (error?: Error) => {
+  if (error) {
+    console.error(`Couldn't listen on port ${PORT}: ${error.message}. Set API_PORT in .env to use another port.`);
+    process.exit(1);
+  }
   console.log(`ChessBuddy server on http://localhost:${PORT}`);
   console.log(coach.configured ? `Coach: ${coach.defaultModel} (default)` : "Coach: no ANTHROPIC_API_KEY yet (Explain is disabled)");
   checkEngine().then(

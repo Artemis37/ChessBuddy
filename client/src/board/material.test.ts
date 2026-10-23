@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { capturedBy, materialBalance } from "./material";
+import { capturedBy, capturedInPosition, materialBalance } from "./material";
 
 describe("capturedBy", () => {
   it("lists each side's captures in chess.com order", () => {
@@ -27,5 +27,21 @@ describe("materialBalance", () => {
 
   it("counts a promoted queen at full value", () => {
     expect(materialBalance("Q6k/8/8/8/8/8/8/K7 b - - 0 1")).toBe(9);
+  });
+});
+
+describe("capturedInPosition", () => {
+  it("lists the pieces missing from the board as the other side's captures", () => {
+    // White has taken a knight and a pawn; Black has taken a bishop.
+    expect(capturedInPosition("r1bqkbnr/ppp2ppp/8/8/8/8/PPPPPPPP/RN1QKBNR w KQkq - 0 1")).toEqual({
+      w: ["p", "p", "n"],
+      b: ["b"],
+    });
+  });
+
+  it("counts a promoted pawn as gone, not captured", () => {
+    // White has only its king and two queens: one pawn promoted, the other seven were taken.
+    const { b } = capturedInPosition("4k3/8/8/8/8/8/8/Q3K2Q w - - 0 1");
+    expect(b).toEqual(["p", "p", "p", "p", "p", "p", "p", "n", "n", "b", "b", "r", "r"]);
   });
 });

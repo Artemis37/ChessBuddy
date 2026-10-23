@@ -1,7 +1,7 @@
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import type { EngineLine, Explanation, MoveGrade } from "../shared/types";
+import type { CoachReply, EngineLine, Explanation, MoveGrade } from "../shared/types";
 import { createApp, type AppDeps } from "./app";
 import { CoachError } from "./coach";
 
@@ -12,12 +12,19 @@ const STALEMATE_SETUP = "7k/4Q3/6K1/8/8/8/8/8 w - - 0 1";
 const MATED = "rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3";
 
 const EXPLANATION: Explanation = {
-  verdict: "Good move.",
-  why: "It takes the center.",
-  betterMove: "This was the top choice.",
-  reply: "Black will challenge the center.",
-  model: "test-model",
+  summary: "Good move.",
+  steps: [
+    {
+      caption: "1. e4 takes the center.",
+      fen: START,
+      moves: [{ uci: "e2e4", san: "e4" }],
+      arrows: [],
+      marks: [],
+      evaluation: { score: { cp: 30 } },
+    },
+  ],
   lesson: "Occupy the center early.",
+  model: "test-model",
 };
 
 function fakeAnalyzer(overrides: Partial<AppDeps["analyzer"]> = {}): AppDeps["analyzer"] {
@@ -41,8 +48,16 @@ const unreachable = async (): Promise<never> => {
   throw new Error("spawn docker ENOENT");
 };
 
+const REPLY: CoachReply = { answer: "1... c5 is fine too.", steps: [], model: "test-model" };
+
 function fakeCoach(overrides: Partial<AppDeps["coach"]> = {}): AppDeps["coach"] {
-  return { configured: true, defaultModel: "claude-sonnet-5-5", explain: async () => EXPLANATION, ...overrides };
+  return {
+    configured: true,
+    defaultModel: "claude-sonnet-5-5",
+    explain: async () => EXPLANATION,
+    ask: async () => REPLY,
+    ...overrides,
+  };
 }
 
 let server: Server | undefined;
@@ -237,8 +252,8 @@ describe("POST /api/explain", () => {
     const seen: unknown[] = [];
     const call = await start({
       coach: fakeCoach({
-        explain: async (_grade, _history, options) => {
-          seen.push(options);
+        explain: async (_grade, _history, { model, perspective, engine }) => {
+          seen.push({ model, perspective, engine: typeof engine });
           return EXPLANATION;
         },
       }),
@@ -246,9 +261,31 @@ describe("POST /api/explain", () => {
     await call("POST", "/api/explain", { grade: {}, history: [] });
     await call("POST", "/api/explain", { grade: {}, history: [], model: "claude-haiku-5-5", perspective: "opponent" });
     expect(seen).toEqual([
-      { model: "claude-sonnet-5-5", perspective: "mine" },
-      { model: "claude-haiku-5-5", perspective: "opponent" },
+      { model: "claude-sonnet-5-5", perspective: "mine", engine: "function" },
+      { model: "claude-haiku-5-5", perspective: "opponent", engine: "function" },
     ]);
+  });
+
+  it("gives the coach an engine that searches one line through the shared cache", async () => {
+    const searches: unknown[] = [];
+    let engine: ((fen: string) => Promise<EngineLine[]>) | undefined;
+    const call = await start({
+      analyzer: fakeAnalyzer({
+        analyze: async (_fen, options) => {
+          searches.push(options);
+          return [{ score: { cp: 30 }, pv: ["e2e4"] }];
+        },
+      }),
+      coach: fakeCoach({
+        explain: async (_grade, _history, options) => {
+          engine = options.engine;
+          return EXPLANATION;
+        },
+      }),
+    });
+    await call("POST", "/api/explain", { grade: {}, history: [] });
+    expect(await engine!(START)).toEqual([{ score: { cp: 30 }, pv: ["e2e4"] }]);
+    expect(searches).toEqual([{ multipv: 1, depth: 10 }]);
   });
 
   it("rejects a model that isn't offered", async () => {
@@ -256,6 +293,48 @@ describe("POST /api/explain", () => {
     const { status, body } = await call("POST", "/api/explain", { grade: {}, history: [], model: "gpt-4" });
     expect(status).toBe(400);
     expect(body.error).toMatch(/^model: Must be one of claude-sonnet-5-5, claude-opus-5-5, claude-haiku-5-5/);
+  });
+});
+
+describe("POST /api/ask", () => {
+  const EXPLAINED = { summary: "Good move.", steps: ["1. e4 takes the center."], lesson: "Occupy the center early." };
+
+  it("passes the question, the explanation and the earlier questions to the coach", async () => {
+    const seen: unknown[] = [];
+    const call = await start({
+      coach: fakeCoach({
+        ask: async (_grade, history, explanation, thread, question, { model }) => {
+          seen.push({ history, explanation, thread, question, model });
+          return REPLY;
+        },
+      }),
+    });
+    const thread = [{ question: "Why not d4?", answer: "Also good.", steps: [] }];
+    const result = await call("POST", "/api/ask", {
+      grade: {},
+      history: ["e4"],
+      explanation: EXPLAINED,
+      thread,
+      question: "  What about c5?  ",
+    });
+    expect(result).toEqual({ status: 200, body: REPLY });
+    expect(seen).toEqual([
+      { history: ["e4"], explanation: EXPLAINED, thread, question: "What about c5?", model: "claude-sonnet-5-5" },
+    ]);
+  });
+
+  it("asks for a question when it is empty", async () => {
+    const call = await start();
+    const { status, body } = await call("POST", "/api/ask", { grade: {}, history: [], explanation: EXPLAINED, question: " " });
+    expect(status).toBe(400);
+    expect(body.error).toBe("question: Type a question");
+  });
+
+  it("needs the explanation being asked about", async () => {
+    const call = await start();
+    const { status, body } = await call("POST", "/api/ask", { grade: {}, history: [], question: "Why?" });
+    expect(status).toBe(400);
+    expect(body.error).toBe("explanation: Required");
   });
 });
 

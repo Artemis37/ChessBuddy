@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { numberedLine } from "./notation";
+import { numberedLine, numberedMoves } from "./notation";
 
 const START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 // After 1.e4 e6 2.Ba6, Black to move
@@ -16,5 +16,12 @@ describe("numberedLine", () => {
 
   it("returns an empty string for an empty line", () => {
     expect(numberedLine(START, [])).toBe("");
+  });
+});
+
+describe("numberedMoves", () => {
+  it("gives every move its own number", () => {
+    expect(numberedMoves(START, ["e4", "e6", "Bc4"])).toEqual(["1. e4", "1... e6", "2. Bc4"]);
+    expect(numberedMoves(AFTER_BA6, ["Nxa6", "d4"])).toEqual(["2... Nxa6", "3. d4"]);
   });
 });

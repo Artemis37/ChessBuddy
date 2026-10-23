@@ -5,16 +5,21 @@ import { COACH_MODELS, type Color, type PositionEval, type StatusResponse } from
 import { api } from "./api";
 import { Board, type BoardArrow } from "./board/Board";
 import { EvalBar } from "./board/EvalBar";
-import { capturedBy, materialBalance } from "./board/material";
+import { capturedBy, capturedInPosition, materialBalance } from "./board/material";
 import type { Premove } from "./board/placement";
 import { PlayerBar } from "./board/PlayerBar";
 import { MoveList } from "./components/MoveList";
 import { MovePanel } from "./components/MovePanel";
 import { SetupCard } from "./components/SetupCard";
-import { colorName, type PlayedMove, type Settings } from "./game";
+import { colorName, moveNumber, type PlayedMove, type Settings } from "./game";
 
 const START_FEN = new Chess().fen();
 const BEST_ARROW = "rgba(129, 182, 76, 0.95)";
+/** chess.com's arrow color, for the attacks and threats an explanation points out. */
+const STEP_ARROW = "rgba(255, 170, 0, 0.9)";
+/** Pause before a step's first move, so the jump to its starting position is seen first. */
+const STEP_START_MS = 500;
+const STEP_MOVE_MS = 650;
 const BOT_MIN_THINK_MS = 400;
 /** Pause before a premove is played, so the opponent's move is seen first. */
 const PREMOVE_DELAY_MS = 120;
@@ -48,6 +53,16 @@ function lastGradedIndex(moves: PlayedMove[]): number | null {
   return null;
 }
 
+/** An explanation being played on the board. */
+interface Walkthrough {
+  moveId: number;
+  /** Which answer in the move's thread is playing; null for the explanation itself. */
+  reply: number | null;
+  step: number;
+  /** How many of the step's moves the board has played so far. */
+  played: number;
+}
+
 function loadModel(): string {
   try {
     return localStorage.getItem(MODEL_KEY) ?? "";
@@ -70,6 +85,7 @@ export function App() {
   const [chosenModel, setChosenModel] = useState(loadModel);
   const [evals, setEvals] = useState<Record<string, PositionEval>>({});
   const [book, setBook] = useState<OpeningBook | null>(null);
+  const [walkthrough, setWalkthrough] = useState<Walkthrough | null>(null);
   const nextId = useRef(1);
   /** Bumped whenever the move list is rewritten, so late bot replies are dropped. */
   const gameToken = useRef(0);
@@ -190,12 +206,39 @@ export function App() {
     return () => clearTimeout(timer);
   }, [premoves, fen, turn, result, settings, play]);
 
+  const walkMoveIndex = walkthrough ? moves.findIndex((m) => m.id === walkthrough.moveId) : -1;
+  const walkMove = walkMoveIndex >= 0 ? moves[walkMoveIndex] : undefined;
+  const walkSteps =
+    !walkthrough || !walkMove
+      ? []
+      : walkthrough.reply === null
+        ? (walkMove.explanation?.steps ?? [])
+        : (walkMove.thread?.[walkthrough.reply]?.reply.steps ?? []);
+  const walkStep = walkthrough ? walkSteps[walkthrough.step] : undefined;
+
+  // Plays the current step's moves one at a time.
+  useEffect(() => {
+    if (!walkthrough || !walkStep || walkthrough.played >= walkStep.moves.length) return;
+    const timer = setTimeout(
+      () => setWalkthrough((w) => w && { ...w, played: w.played + 1 }),
+      walkthrough.played === 0 ? STEP_START_MS : STEP_MOVE_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [walkthrough, walkStep]);
+
+  /** Plays a step of a move's explanation, or of one of its answers, on the board from its start. */
+  const showStep = useCallback((moveId: number, step: number, reply: number | null = null) => {
+    setWalkthrough({ moveId, reply, step, played: 0 });
+    setPremoves([]);
+  }, []);
+
   const rewind = (count: number) => {
     gameToken.current++;
     setMoves((list) => list.slice(0, list.length - count));
     setViewPly(null);
     setPremoves([]);
     setBotError(null);
+    setWalkthrough(null);
   };
 
   const newGame = () => {
@@ -206,6 +249,7 @@ export function App() {
     setPremoves([]);
     setFlipped(false);
     setBotError(null);
+    setWalkthrough(null);
   };
 
   const retry = (index: number) => rewind(moves.length - index);
@@ -224,16 +268,30 @@ export function App() {
       const clamped = Math.max(0, Math.min(moves.length, ply));
       setViewPly(clamped >= moves.length ? null : clamped);
       if (clamped < moves.length) setPremoves([]);
+      setWalkthrough(null);
     },
     [moves.length],
   );
   const shownCount = live ? moves.length : viewPly!;
 
-  // Arrow keys step through the game, as on chess.com.
+  // Arrow keys step through the game, as on chess.com; during an explanation they step through
+  // its steps, and Esc goes back to the game.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
       if (["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName)) return;
+      if (walkthrough && walkStep) {
+        const last = walkSteps.length - 1;
+        if (event.key === "Escape") setWalkthrough(null);
+        else if (event.key === "ArrowLeft") {
+          showStep(walkthrough.moveId, Math.max(0, walkthrough.step - 1), walkthrough.reply);
+        } else if (event.key === "ArrowRight") {
+          showStep(walkthrough.moveId, Math.min(last, walkthrough.step + 1), walkthrough.reply);
+        }
+        else return;
+        event.preventDefault();
+        return;
+      }
       const steps: Record<string, number> = { ArrowLeft: shownCount - 1, ArrowRight: shownCount + 1, Home: 0 };
       if (event.key === "End") goTo(moves.length);
       else if (event.key in steps) goTo(steps[event.key]);
@@ -242,7 +300,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [goTo, shownCount, moves.length]);
+  }, [goTo, shownCount, moves.length, walkthrough, walkStep, walkSteps.length, showStep]);
 
   const explain = (index: number) => {
     const move = moves[index];
@@ -250,9 +308,43 @@ export function App() {
     updateMove(move.id, { explaining: true, explainError: undefined });
     const perspective = move.color === settings.myColor ? "mine" : "opponent";
     api.explain(move.grade, moves.slice(0, index).map((m) => m.san), coachModel, perspective).then(
-      (explanation) => updateMove(move.id, { explanation, explaining: false }),
+      (explanation) => {
+        // Earlier questions were about the old explanation.
+        updateMove(move.id, { explanation, explaining: false, thread: [], askError: undefined });
+        if (explanation.steps.length > 0) showStep(move.id, 0);
+      },
       (err: Error) => updateMove(move.id, { explaining: false, explainError: err.message }),
     );
+  };
+
+  const ask = (index: number, question: string) => {
+    const move = moves[index];
+    if (!move?.grade || !move.explanation || move.asking || move.explaining) return;
+    updateMove(move.id, { asking: question, askError: undefined });
+    const perspective = move.color === settings.myColor ? "mine" : "opponent";
+    const thread = move.thread ?? [];
+    const explanation = move.explanation;
+    api
+      .ask(
+        move.grade,
+        moves.slice(0, index).map((m) => m.san),
+        coachModel,
+        perspective,
+        { summary: explanation.summary, steps: explanation.steps.map((s) => s.caption), lesson: explanation.lesson },
+        thread.map((e) => ({ question: e.question, answer: e.reply.answer, steps: e.reply.steps.map((s) => s.caption) })),
+        question,
+      )
+      .then(
+        (reply) => {
+          setMoves((list) =>
+            list.map((m) =>
+              m.id === move.id ? { ...m, asking: undefined, thread: [...(m.thread ?? []), { question, reply }] } : m,
+            ),
+          );
+          if (reply.steps.length > 0) showStep(move.id, 0, thread.length);
+        },
+        (err: Error) => updateMove(move.id, { asking: undefined, askError: err.message }),
+      );
   };
 
   const chooseModel = (id: string) => {
@@ -289,21 +381,42 @@ export function App() {
     );
   }, [displayFen, evaluation, gradeComing]);
 
+  // While an explanation plays, the board shows its step instead of the game.
+  const walkView = useMemo(() => {
+    if (!walkthrough || !walkStep) return null;
+    const board = new Chess(walkStep.fen);
+    const shown = walkStep.moves.slice(0, walkthrough.played);
+    for (const m of shown) board.move(toMove(m.uci));
+    const last = shown[shown.length - 1];
+    return { fen: board.fen(), lastMove: last ? toMove(last.uci) : null, done: shown.length === walkStep.moves.length };
+  }, [walkthrough, walkStep]);
+
   const opening = book ? openingFor(moves.slice(0, shownCount).map((m) => m.fenAfter), book) : null;
   const orientation: Color = flipped ? other(settings.myColor) : settings.myColor;
-  const captured = capturedBy(moves.slice(0, shownCount));
-  const balance = materialBalance(displayFen);
+  const boardFen = walkView ? walkView.fen : displayFen;
+  const captured = walkView ? capturedInPosition(boardFen) : capturedBy(moves.slice(0, shownCount));
+  const balance = materialBalance(boardFen);
+  const boardEvaluation = walkStep
+    ? walkView?.done
+      ? walkStep.evaluation
+      : (gradeEvals.get(walkStep.fen) ?? walkStep.evaluation)
+    : evaluation;
 
   const arrows: BoardArrow[] = [];
   const best = !live && shownMove?.grade && !shownMove.grade.isBest ? shownMove.grade.bestMoves[0] : undefined;
-  if (best) {
+  if (walkStep) {
+    if (walkView?.done) {
+      for (const a of walkStep.arrows) arrows.push({ from: a.from as Square, to: a.to as Square, color: STEP_ARROW });
+    }
+  } else if (best) {
     const bestMove = toMove(best.uci);
     arrows.push({ from: bestMove.from, to: bestMove.to, color: BEST_ARROW });
   }
+  const marks = walkStep && walkView?.done ? walkStep.marks : [];
 
-  const movable: Color | null = live && !result && humanTurn && !botThinking ? turn : null;
+  const movable: Color | null = live && !walkView && !result && humanTurn && !botThinking ? turn : null;
   const premoveColor: Color | null =
-    live && !result && settings.mode === "bot" && turn !== settings.myColor ? settings.myColor : null;
+    live && !walkView && !result && settings.mode === "bot" && turn !== settings.myColor ? settings.myColor : null;
   const botLabel = settings.rating === "max" ? "Maximum" : `${settings.rating}`;
 
   const playerName = (color: Color) =>
@@ -341,18 +454,33 @@ export function App() {
       <main className="layout">
         <div className="board-dock">
           <section className="board-col">
+            {walkthrough && walkStep && (
+              <div className="walk-strip">
+                <span>
+                  Explaining{" "}
+                  <strong>
+                    {moveNumber(walkMoveIndex)} {moves[walkMoveIndex].san}
+                  </strong>{" "}
+                  · {walkthrough.reply !== null && "answer · "}step {walkthrough.step + 1} of {walkSteps.length}
+                </span>
+                <button onClick={() => setWalkthrough(null)} title="Back to the game (Esc)">
+                  <span aria-hidden>✕</span> Esc
+                </button>
+              </div>
+            )}
             {playerBar(other(orientation))}
             <div className="board-row">
-              <EvalBar evaluation={evaluation} orientation={orientation} />
+              <EvalBar evaluation={boardEvaluation} orientation={orientation} />
               <div className="board-wrap">
                 <Board
-                  fen={displayFen}
+                  fen={boardFen}
                   orientation={orientation}
                   movable={movable}
                   premoveColor={premoveColor}
-                  premoves={live ? premoves : []}
-                  lastMove={shownMove ? toMove(shownMove.uci) : null}
+                  premoves={live && !walkView ? premoves : []}
+                  lastMove={walkView ? walkView.lastMove : shownMove ? toMove(shownMove.uci) : null}
                   arrows={arrows}
+                  marks={marks}
                   onMove={(from, to, promotion) => play(`${from}${to}${promotion ?? ""}`)}
                   onPremove={(premove) => setPremoves((list) => [...list, premove])}
                   onCancelPremoves={() => setPremoves([])}
@@ -407,6 +535,13 @@ export function App() {
             onRetry={retry}
             onAnalyze={(i) => grade(moves[i])}
             onShowOnBoard={(i) => goTo(i + 1)}
+            active={
+              panelIndex !== null && walkthrough?.moveId === moves[panelIndex]?.id && walkStep
+                ? { reply: walkthrough.reply, step: walkthrough.step }
+                : null
+            }
+            onShowStep={(i, step, reply) => showStep(moves[i].id, step, reply)}
+            onAsk={ask}
           />
         </aside>
       </main>

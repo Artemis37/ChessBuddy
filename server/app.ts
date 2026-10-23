@@ -27,7 +27,7 @@ export interface AppDeps {
   analyzer: Analyzer & EngineConnection;
   /** A separate connection for bot moves, so the bot never waits behind grading. */
   bot: EngineConnection & { move(fen: string, rating: BotRating): Promise<string | null> };
-  coach: Pick<Coach, "configured" | "defaultModel" | "explain">;
+  coach: Pick<Coach, "configured" | "defaultModel" | "explain" | "ask">;
   analysisDepth: number;
   /** Built client to serve, if it exists. */
   distDir?: string;
@@ -141,20 +141,49 @@ export function createApp({ analyzer: engine, bot, coach, analysisDepth, distDir
     res.json(result satisfies PositionEval);
   });
 
+  const explainBody = z.object({
+    grade: z.custom<MoveGrade>((v) => typeof v === "object" && v !== null, "Required"),
+    history: z.array(z.string()),
+    model: z
+      .string()
+      .refine((id) => coachModels.includes(id), `Must be one of ${coachModels.join(", ")}`)
+      .default(coach.defaultModel),
+    perspective: z.enum(["mine", "opponent"]).default("mine"),
+  });
+  // The coach's try_moves tool asks the grading connection for the best line in a position.
+  const lineEngine = (position: string) =>
+    withEngine("analyzer", () => analyzer.analyze(position, { multipv: 1, depth: analysisDepth }));
+
   app.post("/api/explain", async (req, res) => {
+    const body = parse(explainBody, req.body);
+    res.json(
+      await coach.explain(body.grade, body.history, {
+        model: body.model,
+        perspective: body.perspective,
+        engine: lineEngine,
+      }),
+    );
+  });
+
+  app.post("/api/ask", async (req, res) => {
     const body = parse(
-      z.object({
-        grade: z.custom<MoveGrade>((v) => typeof v === "object" && v !== null, "Required"),
-        history: z.array(z.string()),
-        model: z
-          .string()
-          .refine((id) => coachModels.includes(id), `Must be one of ${coachModels.join(", ")}`)
-          .default(coach.defaultModel),
-        perspective: z.enum(["mine", "opponent"]).default("mine"),
+      explainBody.extend({
+        explanation: z.object({ summary: z.string(), steps: z.array(z.string()).max(10), lesson: z.string() }),
+        thread: z
+          .array(z.object({ question: z.string().max(500), answer: z.string(), steps: z.array(z.string()).max(10) }))
+          .max(20)
+          .default([]),
+        question: z.string().trim().min(1, "Type a question").max(500, "Keep the question under 500 characters"),
       }),
       req.body,
     );
-    res.json(await coach.explain(body.grade, body.history, { model: body.model, perspective: body.perspective }));
+    res.json(
+      await coach.ask(body.grade, body.history, body.explanation, body.thread, body.question, {
+        model: body.model,
+        perspective: body.perspective,
+        engine: lineEngine,
+      }),
+    );
   });
 
   app.use("/api", (_req, res) => {

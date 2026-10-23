@@ -41,6 +41,7 @@ describe("gradeMove", () => {
     expect(grade.positionAfter).toEqual({ score: { cp: 38 } });
     expect(grade.bestMoves.map((m) => m.san)).toEqual(["Bb5", "Bc4", "d4"]);
     expect(grade.bestMoves[0].line).toEqual(["Bb5", "a6", "Ba4"]);
+    expect(grade.bestMoves[1].position).toEqual({ score: { cp: 32 } });
     expect(grade.opponentReply).toEqual(["a6", "Ba4"]);
     expect(grade.motifs).toEqual([]);
   });

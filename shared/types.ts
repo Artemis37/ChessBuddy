@@ -35,6 +35,8 @@ export interface SuggestedLine {
   eval: string;
   /** The line in SAN, starting with this move. */
   line: string[];
+  /** The same evaluation from White's point of view, for the evaluation bar. */
+  position: PositionEval;
 }
 
 /** Engine-derived facts about one move. The coach explains moves only from these. */
@@ -63,15 +65,44 @@ export interface MoveGrade {
   motifs: string[];
 }
 
+/** One step of an explanation: a sentence, and the moves the board plays to show it. */
+export interface ExplanationStep {
+  caption: string;
+  /** Position the board starts the step from. */
+  fen: string;
+  /** Moves the board plays, in order. Taken from the engine's lines, never written by the coach. */
+  moves: { uci: string; san: string }[];
+  /** Drawn once the moves are played: attacks and threats, checked against that position. */
+  arrows: { from: string; to: string }[];
+  /** Squares outlined once the moves are played, such as a hanging piece. */
+  marks: string[];
+  /** Evaluation at the end of the step, from White's point of view. */
+  evaluation: PositionEval;
+}
+
 export interface Explanation {
-  verdict: string;
-  why: string;
-  betterMove: string;
-  /** The best reply to the move and its point. */
-  reply: string;
+  /** One short sentence: the main point about the move. */
+  summary: string;
+  steps: ExplanationStep[];
   lesson: string;
   /** Model that wrote the explanation. */
   model: string;
+}
+
+/** The coach's answer to a follow-up question about an explained move. */
+export interface CoachReply {
+  answer: string;
+  /** Moves that show the answer on the board; may be empty. */
+  steps: ExplanationStep[];
+  model: string;
+}
+
+/** An earlier question and its answer, sent back so the next answer can build on them. */
+export interface FollowUp {
+  question: string;
+  answer: string;
+  /** Captions of the answer's steps. */
+  steps: string[];
 }
 
 /** Whose move is being explained, from the player's point of view. */

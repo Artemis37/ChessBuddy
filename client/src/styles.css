@@ -174,7 +174,8 @@ select {
   gap: 24px;
   justify-content: center;
   align-items: flex-start;
-  padding: 0 20px 16px;
+  /* No bottom padding here: it would stop the sticky board short of the page end and push it up. */
+  padding: 0 20px;
 }
 
 /* Keeps the board in the middle of the window while the side panel scrolls. */
@@ -186,16 +187,39 @@ select {
   flex-direction: column;
   justify-content: center;
   flex: 0 1 auto;
-  /* Fit the board to the window height, as chess.com does, leaving room for the player bars. */
-  width: min(780px, calc(100vh - 210px));
+  /* Fit the board to the window height, as chess.com does, leaving room for the player bars
+     and for the explanation strip above them. */
+  width: min(780px, calc(100vh - 220px));
   min-width: 300px;
 }
 
 .board-col {
+  position: relative;
   width: 100%;
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/* Sits in the free space above the board, so showing it doesn't move the board. */
+.walk-strip {
+  position: absolute;
+  bottom: calc(100% + 2px);
+  left: 34px;
+  right: 0;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-body);
+}
+
+.walk-strip button {
+  padding: 1px 8px;
+  font-size: 12px;
+  color: #c6c6c6;
 }
 
 .board-row {
@@ -214,7 +238,7 @@ select {
   flex-direction: column;
   gap: 12px;
   min-width: 0;
-  padding-top: 16px;
+  padding: 16px 0;
 }
 
 @media (max-width: 1000px) {
@@ -233,6 +257,10 @@ select {
 
   .side-col {
     padding-top: 0;
+  }
+
+  .walk-strip {
+    position: static;
   }
 
   .side-col {
@@ -295,6 +323,17 @@ select {
 
 .sq.grab {
   cursor: grab;
+}
+
+/* A square an explanation points at, such as a hanging piece. */
+.sq.marked::before {
+  content: "";
+  position: absolute;
+  inset: 3%;
+  border: calc(var(--sq) * 0.06) solid rgba(226, 60, 50, 0.95);
+  border-radius: 8%;
+  z-index: 3;
+  pointer-events: none;
 }
 
 .sq.hover::after {
@@ -912,15 +951,154 @@ select {
   color: var(--error);
 }
 
+.facts-line {
+  margin: 6px 0 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 .explanation {
   margin-top: 12px;
   padding-top: 10px;
   border-top: 1px solid var(--border);
 }
 
-.explanation .verdict {
+.explanation .summary {
+  margin: 0 0 8px;
+  font-size: 16px;
   font-weight: 700;
-  margin: 0 0 6px;
+  color: var(--text);
+}
+
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  color: var(--text-body);
+  font-weight: 400;
+  text-align: left;
+  border-radius: 6px;
+}
+
+.step:hover:not(:disabled) {
+  background: #3a3835;
+}
+
+.step.on,
+.step.on:hover:not(:disabled) {
+  background: var(--selected);
+  color: var(--text);
+}
+
+.step-no {
+  flex: 0 0 20px;
+  height: 20px;
+  margin-top: 1px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--surface-2);
+  color: #c6c6c6;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.step.on .step-no {
+  background: var(--green);
+  color: #fff;
+}
+
+.step-nav {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin: 10px 0 4px;
+}
+
+.step-nav button {
+  display: grid;
+  place-items: center;
+  height: 34px;
+  padding: 0;
+  background: var(--nav-button);
+  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.25);
+}
+
+.step-nav button:hover:not(:disabled) {
+  background: #3a3936;
+}
+
+.step-nav svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: #c6c6c6;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.explained-by {
+  margin-top: 10px;
+}
+
+/* Follow-up questions */
+
+.exchange {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.exchange .question {
+  margin: 0 0 8px auto;
+  width: fit-content;
+  max-width: 85%;
+  padding: 6px 10px;
+  border-radius: 10px 10px 2px 10px;
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.exchange .answer {
+  margin: 0 0 4px;
+  color: var(--text);
+}
+
+.ask {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.ask input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.ask input::placeholder {
+  color: var(--muted);
+}
+
+.ask input:focus {
+  outline: none;
+  border-color: var(--green);
 }
 
 .explanation h3 {
