@@ -60,6 +60,56 @@ describe("buildExplainRequest", () => {
     });
   });
 
+  describe("while learning an opening", () => {
+    const opening = {
+      studying: "King's Pawn Game",
+      reached: "King's Pawn Game",
+      bookMove: true,
+      bookMoves: ["e5", "c5", "e6", "c6"],
+      line: ["e5", "Nf3"],
+    };
+
+    it("asks about a book move as opening theory, from the side being learned", () => {
+      const request = buildExplainRequest(GRADE, ["e4"], { model: "claude-sonnet-5-5", perspective: "opponent", opening }, "medium");
+      expect(userText(request)).toMatch(
+        /^I'm learning the King's Pawn Game as White\. Explain 1\.\.\. e5, a book move for Black: the idea behind it/,
+      );
+      const facts = JSON.parse(userText(request).slice(userText(request).indexOf("{")));
+      expect(facts.opening).toEqual({
+        learning: "King's Pawn Game",
+        positionAfterMoveIsCalled: "King's Pawn Game",
+        isBookMove: true,
+        bookMovesInPositionBefore: ["1... e5", "1... c5", "1... e6", "1... c6"],
+      });
+    });
+
+    it("compares a move off the book with the book's moves", () => {
+      const off = { ...opening, bookMove: false, bookMoves: ["c5", "e6"], line: [] };
+      const request = buildExplainRequest(GRADE, ["e4"], { model: "claude-sonnet-5-5", perspective: "mine", opening: off }, "medium");
+      expect(userText(request)).toMatch(
+        /^I'm learning the King's Pawn Game as Black\. Instead of a book move \(1\.\.\. c5 or 1\.\.\. e6\), Black played 1\.\.\. e5\./,
+      );
+    });
+
+    it("says when the position is past the book", () => {
+      const past = { ...opening, bookMove: false, bookMoves: [], line: [] };
+      const request = buildExplainRequest(GRADE, ["e4"], { model: "claude-sonnet-5-5", perspective: "mine", opening: past }, "medium");
+      expect(userText(request)).toContain("The moves have left the opening book. Explain Black's move 1... e5.");
+      const facts = JSON.parse(userText(request).slice(userText(request).indexOf("{")));
+      expect(facts.opening.bookMovesInPositionBefore).toBe("none: the position is past the opening book");
+    });
+
+    it("lists the book's line with the board lines", () => {
+      const lines = { book: { fen: GRADE.fenBefore, moves: ["e5", "Nf3"], evaluation: { score: { cp: 30 } } } };
+      const request = buildExplainRequest(GRADE, ["e4"], { model: "claude-sonnet-5-5", perspective: "mine", opening }, "medium", lines);
+      const facts = JSON.parse(userText(request).slice(userText(request).indexOf("{")));
+      expect(facts.boardLines.book).toEqual({
+        about: "The opening book's line from the position before the move: how the opening usually goes on",
+        moves: { "1": "1... e5", "2": "2. Nf3" },
+      });
+    });
+  });
+
   it("asks about the opponent's move from the player's side", () => {
     const request = buildExplainRequest(GRADE, ["e4"], { model: "claude-sonnet-5-5", perspective: "opponent" }, "medium");
     expect(userText(request)).toMatch(/^Explain my opponent's move 1\.\.\. e5\. My opponent is Black; I am White\./);
@@ -179,6 +229,31 @@ describe("Coach tool loop", () => {
     const [result] = requests[1].messages[2].content as Anthropic.Beta.BetaToolResultBlockParam[];
     expect(result).toMatchObject({ type: "tool_result", tool_use_id: "t1" });
     expect(JSON.parse(result.content as string)).toMatchObject({ line: "try1", moves: { "1": "3... Qf6", "2": "4. Nc3" } });
+  });
+
+  it("gives the steps the opening book's line while learning an opening", async () => {
+    const bookAnswer = {
+      ...answer,
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            summary: "Not the book move.",
+            steps: [{ caption: "The book plays 3... g6.", line: "book", fromMove: 1, toMove: 2, arrows: [], marks: [] }],
+            lesson: "Meet Qh5 with g6.",
+          }),
+        },
+      ],
+    };
+    const { client, requests } = fakeClient([bookAnswer]);
+    const explanation = await new Coach("claude-sonnet-5-5", "medium", client).explain(grade, [], {
+      model: "claude-sonnet-5-5",
+      perspective: "mine",
+      engine,
+      opening: { studying: "Bishop's Opening", reached: null, bookMove: false, bookMoves: ["g6"], line: ["g6", "Qf3"] },
+    });
+    expect(explanation.steps[0].moves.map((m) => m.san)).toEqual(["g6", "Qf3"]);
+    expect(userText(requests[0])).toContain('"book"');
   });
 
   it("turns tools off on the last round so the coach has to answer", async () => {

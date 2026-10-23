@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { numberedLine } from "../../../shared/notation";
 import {
   COACH_MODELS,
@@ -8,6 +8,7 @@ import {
   type StatusResponse,
 } from "../../../shared/types";
 import { CLASSIFICATION, colorName, moveNumber, type PlayedMove } from "../game";
+import { activePath, type ThreadEntry } from "../thread";
 
 interface Props {
   move?: PlayedMove;
@@ -15,6 +16,8 @@ interface Props {
   myColor: Color;
   /** Playing both sides: every move is graded, and the other color is yours to move too. */
   bothSides: boolean;
+  /** Learning an opening: you move both sides, and book moves are graded only when asked. */
+  learning: boolean;
   onBoard: boolean;
   coach: StatusResponse["coach"] | null;
   model: string;
@@ -27,7 +30,9 @@ interface Props {
   /** The step the board is playing for this move (of the explanation, or of an answer), or null. */
   active: { reply: number | null; step: number } | null;
   onShowStep: (index: number, step: number, reply: number | null) => void;
-  onAsk: (index: number, question: string) => void;
+  /** Asks a question at the end of the thread, or with `depth`, replaces the question there with a new version. */
+  onAsk: (index: number, question: string, depth?: number) => void;
+  onShowVersion: (index: number, depth: number, version: number) => void;
 }
 
 export function MovePanel({
@@ -35,6 +40,7 @@ export function MovePanel({
   index,
   myColor,
   bothSides,
+  learning,
   onBoard,
   coach,
   model,
@@ -46,15 +52,18 @@ export function MovePanel({
   active,
   onShowStep,
   onAsk,
+  onShowVersion,
 }: Props) {
   if (!move || index === null) {
     return (
       <section className="card panel">
         <h2>Move review</h2>
         <p className="muted">
-          {bothSides
-            ? "Every move, White's and Black's, gets graded here. Click any move in the list to review it."
-            : `Every ${colorName(myColor)} move you play gets graded here. Click any move in the list to review it, including your opponent's.`}
+          {learning
+            ? "Step to a move to review it here, and explain it to learn the idea behind it."
+            : bothSides
+              ? "Every move, White's and Black's, gets graded here. Click any move in the list to review it."
+              : `Every ${colorName(myColor)} move you play gets graded here. Click any move in the list to review it, including your opponent's.`}
         </p>
       </section>
     );
@@ -62,11 +71,22 @@ export function MovePanel({
 
   const mine = move.color === myColor;
   const title = `${moveNumber(index)} ${move.san}`;
-  const owner = mine
-    ? "Your move"
-    : bothSides
-      ? `The other side's move (${colorName(move.color)})`
-      : `Your opponent's move (${colorName(move.color)})`;
+  const owner = learning
+    ? `${colorName(move.color)} · ${move.book ? "book move" : "off the book"}`
+    : mine
+      ? "Your move"
+      : bothSides
+        ? `The other side's move (${colorName(move.color)})`
+        : `Your opponent's move (${colorName(move.color)})`;
+  const explainActions = (
+    <ExplainActions move={move} coach={coach} model={model} onModelChange={onModelChange} onExplain={() => onExplain(index)} />
+  );
+  const coachNotes = (
+    <>
+      {!coach?.ready && <p className="muted small">{coach?.error ?? "Coach unavailable."}</p>}
+      {move.explainError && <p className="error-text">{move.explainError}</p>}
+    </>
+  );
 
   if (move.gradeError) {
     return (
@@ -88,6 +108,15 @@ export function MovePanel({
           <p className="muted">
             <span className="spinner" /> Analyzing with Stockfish…
           </p>
+        ) : learning ? (
+          <>
+            <p className="muted">A book move, part of the opening's theory. Explain it to learn the idea behind it.</p>
+            {explainActions}
+            <div className="actions">
+              <button onClick={() => onAnalyze(index)}>Analyze this move</button>
+            </div>
+            {coachNotes}
+          </>
         ) : (
           <>
             <p className="muted">Moves by the other side aren't graded automatically.</p>
@@ -106,6 +135,10 @@ export function MovePanel({
   const info = CLASSIFICATION[grade.classification];
   const best = grade.bestMoves[0];
   const weak = ["inaccuracy", "mistake", "blunder"].includes(grade.classification);
+  const thread = activePath(move.thread);
+  const busy = Boolean(move.asking) || Boolean(move.explaining);
+  // Learning an opening, every move off the book is one you tried.
+  const retryable = learning ? !move.book : mine;
   const explanation = move.explanation;
 
   return (
@@ -166,21 +199,22 @@ export function MovePanel({
           <p>{explanation.lesson}</p>
           <p className="muted small explained-by">Explained by {coachModelLabel(explanation.model)}</p>
 
-          {(move.thread ?? []).map((exchange, reply) => (
-            <div className="exchange" key={reply}>
-              <p className="question">{exchange.question}</p>
-              <p className="answer">{exchange.reply.answer}</p>
-              <StepList
-                steps={exchange.reply.steps}
-                active={active?.reply === reply ? active.step : null}
-                onShow={(step) => onShowStep(index, step, reply)}
-              />
-              <p className="muted small">Answered by {coachModelLabel(exchange.reply.model)}</p>
-            </div>
+          {/* While a question is answered, the thread shows only what the coach was given. */}
+          {thread.slice(0, move.asking?.depth).map((entry, depth) => (
+            <ExchangeView
+              key={`${move.id}-${depth}-${entry.version}`}
+              entry={entry}
+              canAsk={!busy && Boolean(coach?.ready)}
+              canSwitch={!busy}
+              active={active?.reply === depth ? active.step : null}
+              onShowStep={(step) => onShowStep(index, step, depth)}
+              onAsk={(question) => onAsk(index, question, depth)}
+              onShowVersion={(version) => onShowVersion(index, depth, version)}
+            />
           ))}
           {move.asking && (
             <div className="exchange">
-              <p className="question">{move.asking}</p>
+              <p className="question">{move.asking.question}</p>
               <p className="muted">
                 <span className="spinner" /> Thinking…
               </p>
@@ -188,42 +222,60 @@ export function MovePanel({
           )}
           {move.askError && <p className="error-text">{move.askError}</p>}
           <AskBox
-            disabled={Boolean(move.asking) || Boolean(move.explaining) || !coach?.ready}
+            disabled={busy || !coach?.ready}
             placeholder={grade.isBest ? "Ask about this move" : `Ask about this move, e.g. why not ${best?.san ?? "another move"}?`}
             onAsk={(question) => onAsk(index, question)}
           />
         </div>
       )}
 
-      <div className="actions">
-        <button
-          className="primary"
-          onClick={() => onExplain(index)}
-          disabled={move.explaining || Boolean(move.asking) || !coach?.ready}
-          title={coach?.ready ? undefined : coach?.error}
-        >
-          {move.explaining ? "Explaining…" : move.explanation ? "Explain again" : "Explain this move"}
-        </button>
-        <label className="model-picker">
-          <span className="sr-only">Model</span>
-          <select value={model} onChange={(e) => onModelChange(e.target.value)} disabled={move.explaining}>
-            {COACH_MODELS.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label} · {m.note}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-      {(!explanation && !onBoard) || (mine && weak) ? (
+      {explainActions}
+      {(!explanation && !onBoard) || (retryable && weak) ? (
         <div className="actions">
           {!explanation && !onBoard && <button onClick={() => onShowOnBoard(index)}>Show on board</button>}
-          {mine && weak && <button onClick={() => onRetry(index)}>Retry this move</button>}
+          {retryable && weak && <button onClick={() => onRetry(index)}>Retry this move</button>}
         </div>
       ) : null}
-      {!coach?.ready && <p className="muted small">{coach?.error ?? "Coach unavailable."}</p>}
-      {move.explainError && <p className="error-text">{move.explainError}</p>}
+      {coachNotes}
     </section>
+  );
+}
+
+/** The Explain button and the model picker next to it. */
+function ExplainActions({
+  move,
+  coach,
+  model,
+  onModelChange,
+  onExplain,
+}: {
+  move: PlayedMove;
+  coach: StatusResponse["coach"] | null;
+  model: string;
+  onModelChange: (model: string) => void;
+  onExplain: () => void;
+}) {
+  return (
+    <div className="actions">
+      <button
+        className="primary"
+        onClick={onExplain}
+        disabled={move.explaining || Boolean(move.asking) || !coach?.ready}
+        title={coach?.ready ? undefined : coach?.error}
+      >
+        {move.explaining ? "Explaining…" : move.explanation ? "Explain again" : "Explain this move"}
+      </button>
+      <label className="model-picker">
+        <span className="sr-only">Model</span>
+        <select value={model} onChange={(e) => onModelChange(e.target.value)} disabled={move.explaining}>
+          {COACH_MODELS.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label} · {m.note}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
   );
 }
 
@@ -270,6 +322,126 @@ function StepList({
         </button>
       </div>
     </>
+  );
+}
+
+/**
+ * A question and its answer, as on claude.ai: Edit asks a changed question in its place and
+ * Retry asks it again, each making a new version; the arrows switch between versions.
+ */
+function ExchangeView({
+  entry,
+  canAsk,
+  canSwitch,
+  active,
+  onShowStep,
+  onAsk,
+  onShowVersion,
+}: {
+  entry: ThreadEntry;
+  canAsk: boolean;
+  canSwitch: boolean;
+  active: number | null;
+  onShowStep: (step: number) => void;
+  onAsk: (question: string) => void;
+  onShowVersion: (version: number) => void;
+}) {
+  const { exchange, version, versions } = entry;
+  /** The question being edited, or null. */
+  const [draft, setDraft] = useState<string | null>(null);
+  const inputId = useId();
+  const edited = draft?.trim() ?? "";
+  const canSend = canAsk && edited !== "" && edited !== exchange.question;
+  const send = () => {
+    if (canSend) onAsk(edited);
+  };
+
+  return (
+    <div className="exchange">
+      {draft === null ? (
+        <>
+          <p className="question">{exchange.question}</p>
+          <div className="question-tools">
+            {versions > 1 && (
+              <span className="versions">
+                <button
+                  className="tool"
+                  aria-label="Previous version"
+                  disabled={!canSwitch || version === 0}
+                  onClick={() => onShowVersion(version - 1)}
+                >
+                  ‹
+                </button>
+                {version + 1} / {versions}
+                <button
+                  className="tool"
+                  aria-label="Next version"
+                  disabled={!canSwitch || version === versions - 1}
+                  onClick={() => onShowVersion(version + 1)}
+                >
+                  ›
+                </button>
+              </span>
+            )}
+            <button
+              className="tool"
+              disabled={!canAsk}
+              title="Change this question. The answers after it stay with the old version."
+              onClick={() => setDraft(exchange.question)}
+            >
+              ✎ Edit
+            </button>
+          </div>
+        </>
+      ) : (
+        <form
+          className="edit-question"
+          onSubmit={(e) => {
+            e.preventDefault();
+            send();
+          }}
+        >
+          <label className="sr-only" htmlFor={inputId}>
+            Edit the question
+          </label>
+          <textarea
+            id={inputId}
+            value={draft}
+            rows={2}
+            maxLength={500}
+            autoFocus
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              } else if (e.key === "Escape") setDraft(null);
+            }}
+          />
+          <div className="actions">
+            <button type="button" onClick={() => setDraft(null)}>
+              Cancel
+            </button>
+            <button type="submit" className="primary" disabled={!canSend}>
+              Send
+            </button>
+          </div>
+        </form>
+      )}
+      <p className="answer">{exchange.reply.answer}</p>
+      <StepList steps={exchange.reply.steps} active={active} onShow={onShowStep} />
+      <p className="muted small answered-by">
+        Answered by {coachModelLabel(exchange.reply.model)}
+        <button
+          className="tool"
+          disabled={!canAsk}
+          title="Ask the same question again for another answer"
+          onClick={() => onAsk(exchange.question)}
+        >
+          ↻ Retry
+        </button>
+      </p>
+    </div>
   );
 }
 

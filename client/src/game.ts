@@ -1,7 +1,8 @@
 import type { PieceSymbol } from "chess.js";
-import type { BotRating, Classification, CoachReply, Color, Explanation, MoveGrade } from "../../shared/types";
+import type { BotRating, Classification, Color, Explanation, MoveGrade } from "../../shared/types";
+import type { Branches } from "./thread";
 
-export type Mode = "bot" | "both";
+export type Mode = "bot" | "both" | "learn";
 
 export interface Settings {
   mode: Mode;
@@ -18,24 +19,24 @@ export interface PlayedMove {
   captured?: PieceSymbol;
   fenBefore: string;
   fenAfter: string;
-  /** Graded automatically: the player's own moves, or every move when playing both sides. Others only when asked. */
+  /**
+   * Graded automatically: the player's own moves, every move when playing both sides, or moves
+   * off the book when learning an opening. Others only when asked.
+   */
   graded: boolean;
+  /** Learning an opening: the move is in the opening book. */
+  book?: boolean;
   grading?: boolean;
   grade?: MoveGrade;
   gradeError?: string;
   explanation?: Explanation;
   explaining?: boolean;
   explainError?: string;
-  /** Follow-up questions about the explanation, with the coach's answers. */
-  thread?: Exchange[];
-  /** The question waiting for an answer, if any. */
-  asking?: string;
+  /** Follow-up questions about the explanation, with the coach's answers and every edited version. */
+  thread?: Branches | null;
+  /** The question waiting for an answer and where in the thread shown it goes, if any. */
+  asking?: { question: string; depth: number };
   askError?: string;
-}
-
-export interface Exchange {
-  question: string;
-  reply: CoachReply;
 }
 
 export const CLASSIFICATION: Record<Classification, { label: string; symbol: string }> = {

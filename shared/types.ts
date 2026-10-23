@@ -108,6 +108,20 @@ export interface FollowUp {
 /** Whose move is being explained, from the player's point of view. */
 export type Perspective = "mine" | "opponent";
 
+/** When the player is learning an opening: what an explanation needs to know about it. */
+export interface OpeningContext {
+  /** The line being learned, such as "Sicilian Defense: Najdorf Variation". */
+  studying: string;
+  /** The opening the position after the move belongs to, if it has a name. */
+  reached: string | null;
+  /** True when the move is in the opening book. */
+  bookMove: boolean;
+  /** The book's moves in the position before the move, in SAN, most-studied first. */
+  bookMoves: string[];
+  /** How the line being learned goes on from the position before the move, in SAN; empty once off it. */
+  line: string[];
+}
+
 export const COACH_MODELS = [
   { id: "claude-sonnet-5-5", label: "Sonnet 5.5", note: "balanced" },
   { id: "claude-opus-5-5", label: "Opus 5.5", note: "most thorough, slower" },

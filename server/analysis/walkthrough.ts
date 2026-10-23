@@ -46,6 +46,8 @@ const MAX_ARROWS = 2;
 const MAX_MARKS = 2;
 /** How many engine moves follow the tried moves. */
 const TRY_CONTINUATION_PLIES = 6;
+/** How many moves of the opening book's line the coach gets to show. */
+const BOOK_LINE_PLIES = 8;
 /** How far past a step's last move a move named in its caption may be and still be added. */
 const MENTION_WINDOW = 6;
 
@@ -65,6 +67,39 @@ export function boardLines(grade: MoveGrade): Record<string, BoardLine> {
     lines[`best${i + 1}`] = { fen: grade.fenBefore, moves: best.line, evaluation: best.position };
   });
   return lines;
+}
+
+/**
+ * The opening book's line from the position before the move, so the coach can show how the
+ * opening usually goes on. Moves that don't fit the position end the line. The evaluation is
+ * the engine's at the end of the line, or `fallback` when the engine can't give one.
+ */
+export async function bookLine(
+  fen: string,
+  moves: string[],
+  engine: LineEngine,
+  fallback: PositionEval,
+): Promise<BoardLine | null> {
+  const board = new Chess(fen);
+  const played: string[] = [];
+  for (const san of moves.slice(0, BOOK_LINE_PLIES)) {
+    try {
+      played.push(board.move(san).san);
+    } catch {
+      break;
+    }
+  }
+  if (played.length === 0) return null;
+  let evaluation = gameResult(board);
+  if (!evaluation) {
+    try {
+      const [best] = await engine(board.fen());
+      if (best) evaluation = { score: toWhite(best.score, board.turn()) };
+    } catch {
+      // The line is still worth showing; the evaluation bar just keeps the earlier figure.
+    }
+  }
+  return { fen, moves: played, evaluation: evaluation ?? fallback };
 }
 
 /**

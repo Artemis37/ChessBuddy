@@ -5,6 +5,7 @@ import type {
   Explanation,
   FollowUp,
   MoveGrade,
+  OpeningContext,
   Perspective,
   PositionEval,
   StatusResponse,
@@ -26,8 +27,8 @@ export const api = {
   botMove: (fen: string, rating: BotRating) => request<BotMoveResponse>("/api/bot-move", { fen, rating }),
   grade: (fen: string, uci: string) => request<MoveGrade>("/api/grade", { fen, uci }),
   evaluate: (fen: string) => request<PositionEval>("/api/eval", { fen }),
-  explain: (grade: MoveGrade, history: string[], model: string, perspective: Perspective) =>
-    request<Explanation>("/api/explain", { grade, history, model, perspective }),
+  explain: (grade: MoveGrade, history: string[], model: string, perspective: Perspective, opening?: OpeningContext) =>
+    request<Explanation>("/api/explain", { grade, history, model, perspective, opening }),
   ask: (
     grade: MoveGrade,
     history: string[],
@@ -36,5 +37,7 @@ export const api = {
     explanation: { summary: string; steps: string[]; lesson: string },
     thread: FollowUp[],
     question: string,
-  ) => request<CoachReply>("/api/ask", { grade, history, model, perspective, explanation, thread, question }),
+    opening?: OpeningContext,
+  ) =>
+    request<CoachReply>("/api/ask", { grade, history, model, perspective, explanation, thread, question, opening }),
 };

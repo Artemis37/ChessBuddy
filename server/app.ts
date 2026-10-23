@@ -149,6 +149,15 @@ export function createApp({ analyzer: engine, bot, coach, analysisDepth, distDir
       .refine((id) => coachModels.includes(id), `Must be one of ${coachModels.join(", ")}`)
       .default(coach.defaultModel),
     perspective: z.enum(["mine", "opponent"]).default("mine"),
+    opening: z
+      .object({
+        studying: z.string().max(200),
+        reached: z.string().max(200).nullable(),
+        bookMove: z.boolean(),
+        bookMoves: z.array(z.string().max(10)).max(60),
+        line: z.array(z.string().max(10)).max(60),
+      })
+      .optional(),
   });
   // The coach's try_moves tool asks the grading connection for the best line in a position.
   const lineEngine = (position: string) =>
@@ -161,6 +170,7 @@ export function createApp({ analyzer: engine, bot, coach, analysisDepth, distDir
         model: body.model,
         perspective: body.perspective,
         engine: lineEngine,
+        opening: body.opening,
       }),
     );
   });
@@ -182,6 +192,7 @@ export function createApp({ analyzer: engine, bot, coach, analysisDepth, distDir
         model: body.model,
         perspective: body.perspective,
         engine: lineEngine,
+        opening: body.opening,
       }),
     );
   });

@@ -266,6 +266,22 @@ describe("POST /api/explain", () => {
     ]);
   });
 
+  it("passes what the coach needs to know about the opening being learned", async () => {
+    const seen: unknown[] = [];
+    const call = await start({
+      coach: fakeCoach({
+        explain: async (_grade, _history, { opening }) => {
+          seen.push(opening);
+          return EXPLANATION;
+        },
+      }),
+    });
+    const opening = { studying: "Sicilian Defense", reached: "Sicilian Defense", bookMove: true, bookMoves: ["c5"], line: ["c5"] };
+    await call("POST", "/api/explain", { grade: {}, history: [], opening });
+    await call("POST", "/api/explain", { grade: {}, history: [] });
+    expect(seen).toEqual([opening, undefined]);
+  });
+
   it("gives the coach an engine that searches one line through the shared cache", async () => {
     const searches: unknown[] = [];
     let engine: ((fen: string) => Promise<EngineLine[]>) | undefined;

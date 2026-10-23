@@ -1,7 +1,7 @@
 import { Chess } from "chess.js";
 import { describe, expect, it } from "vitest";
 import type { MoveGrade } from "../../shared/types";
-import { boardLines, buildSteps, MAX_STEPS, supportsArrow, tryMoves, type StepPlan } from "./walkthrough";
+import { boardLines, bookLine, buildSteps, MAX_STEPS, supportsArrow, tryMoves, type StepPlan } from "./walkthrough";
 
 // 1.e4 e5 2.Bc4 Nc6 3.Qh5, Black to move; 3... Nf6?? allows 4. Qxf7#.
 const BEFORE = "r1bqkbnr/pppp1ppp/2n5/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR b KQkq - 3 3";
@@ -186,5 +186,36 @@ describe("tryMoves", () => {
     const unknown = await tryMoves(lines, { line: "best9", afterMove: 0, moves: ["g6"] }, "b", engine);
     expect(unknown).toEqual({ error: 'There is no board line "best9". Use one of: played, best1, best2.' });
     expect(Object.keys(lines)).toEqual(["played", "best1", "best2"]);
+  });
+});
+
+describe("bookLine", () => {
+  const START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+  const FALLBACK = { score: { cp: 25 } };
+
+  it("plays the book's moves and takes the evaluation at the end of the line from the engine", async () => {
+    const asked: string[] = [];
+    const line = await bookLine(START, ["e4", "c5", "Nf3"], async (fen) => {
+      asked.push(fen);
+      return [{ score: { cp: -40 }, pv: ["d7d6"] }];
+    }, FALLBACK);
+    expect(line).toEqual({ fen: START, moves: ["e4", "c5", "Nf3"], evaluation: { score: { cp: 40 } } });
+    expect(asked).toEqual(["rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2"]);
+  });
+
+  it("stops at the first move that doesn't fit the position, and at eight moves", async () => {
+    const engine = async () => [{ score: { cp: 0 }, pv: [] }];
+    expect((await bookLine(START, ["e4", "e5", "Ke3"], engine, FALLBACK))?.moves).toEqual(["e4", "e5"]);
+    const long = ["Nf3", "Nf6", "Ng1", "Ng8", "Nf3", "Nf6", "Ng1", "Ng8", "Nc3", "Nc6"];
+    expect((await bookLine(START, long, engine, FALLBACK))?.moves).toHaveLength(8);
+  });
+
+  it("keeps the line with the fallback evaluation when the engine fails", async () => {
+    const line = await bookLine(START, ["d4"], async () => Promise.reject(new Error("engine down")), FALLBACK);
+    expect(line).toMatchObject({ moves: ["d4"], evaluation: FALLBACK });
+  });
+
+  it("is null when no move fits", async () => {
+    expect(await bookLine(START, ["Qh5"], async () => [], FALLBACK)).toBeNull();
   });
 });

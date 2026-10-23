@@ -1,8 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { numberedLine, numberedMoves } from "../shared/notation";
-import type { CoachReply, Explanation, FollowUp, MoveGrade, Perspective } from "../shared/types";
+import type { CoachReply, Explanation, FollowUp, MoveGrade, OpeningContext, Perspective } from "../shared/types";
 import {
   boardLines,
+  bookLine,
   buildSteps,
   tryMoves,
   type BoardLine,
@@ -39,6 +40,8 @@ Be brief: the summary at most 12 words, each caption at most 20 words, the lesso
 Ground every concrete claim in the facts and in try_moves results: only name moves that appear in the board lines, and don't claim tactics or evaluations they don't support. General ideas (development, king safety, piece activity, pawn structure, threats) are fine when they follow from the given moves and position. When the move was best or excellent, explain what makes it good rather than looking for flaws.
 
 For the player's own move, address the player as "you". For the opponent's move, call that side "your opponent".
+
+Some requests come from a player learning an opening, with facts about it. Explain such a move as opening theory: what it is for (development, the centre, king safety, a pawn break, a typical piece placement), the plan it belongs to, and a trap or common mistake to know about. The "book" board line, when given, is how the line the player is learning goes on: show the plan with it rather than with the engine's lines, which may leave that line. Book moves are established theory, so don't call them mistakes over small engine differences, though you may say when the engine dislikes a gambit or sideline. For a move off the book, compare it with the book move and show both.
 
 The engine facts are always written from the side that played the move: "+" evaluations favour that side, "#3" means that side can force mate in 3, "-#2" means the other side can, and words like "your knight" in the computed facts mean that side's pieces. Winning chances are on a 0-100 scale for that side.
 
@@ -146,6 +149,8 @@ export interface ExplainOptions {
   perspective: Perspective;
   /** Engine for the try_moves tool; without it the coach can only show the lines it was given. */
   engine?: LineEngine;
+  /** Set when the player is learning an opening. */
+  opening?: OpeningContext;
 }
 
 /** The explanation the player is asking about, as text. */
@@ -176,9 +181,9 @@ export class Coach {
   }
 
   async explain(grade: MoveGrade, history: string[], options: ExplainOptions): Promise<Explanation> {
-    const lines = boardLines(grade);
+    const lines = await linesFor(grade, options);
     const { answer, model } = await this.run<StepsAnswer & { summary: string; lesson: string }>(
-      buildExplainRequest(grade, history, options, this.effort),
+      buildExplainRequest(grade, history, options, this.effort, lines),
       lines,
       grade,
       options.engine,
@@ -195,9 +200,9 @@ export class Coach {
     question: string,
     options: ExplainOptions,
   ): Promise<CoachReply> {
-    const lines = boardLines(grade);
+    const lines = await linesFor(grade, options);
     const { answer, model } = await this.run<StepsAnswer & { answer: string }>(
-      buildAskRequest(grade, history, explanation, thread, question, options, this.effort),
+      buildAskRequest(grade, history, explanation, thread, question, options, this.effort, lines),
       lines,
       grade,
       options.engine,
@@ -268,6 +273,16 @@ export class Coach {
   }
 }
 
+/** The engine's lines for the move, plus the opening book's line when the player is learning an opening. */
+async function linesFor(grade: MoveGrade, { opening, engine }: ExplainOptions): Promise<Record<string, BoardLine>> {
+  const lines = boardLines(grade);
+  if (opening && opening.line.length > 0 && engine) {
+    const book = await bookLine(grade.fenBefore, opening.line, engine, grade.positionBefore);
+    if (book) lines.book = book;
+  }
+  return lines;
+}
+
 async function runTryMoves(
   block: Anthropic.Beta.BetaToolUseBlock,
   lines: Record<string, BoardLine>,
@@ -311,12 +326,13 @@ function baseRequest(model: string, effort: Effort, schema: { [key: string]: unk
 export function buildExplainRequest(
   grade: MoveGrade,
   history: string[],
-  { model, perspective }: ExplainOptions,
+  { model, perspective, opening }: ExplainOptions,
   effort: Effort,
+  lines = boardLines(grade),
 ): Request {
   return {
     ...baseRequest(model, effort, EXPLANATION_SCHEMA),
-    messages: [{ role: "user", content: describeMove(grade, history, perspective) }],
+    messages: [{ role: "user", content: describeMove(grade, history, perspective, lines, opening) }],
   };
 }
 
@@ -327,11 +343,12 @@ export function buildAskRequest(
   explanation: ExplanationText,
   thread: FollowUp[],
   question: string,
-  { model, perspective }: ExplainOptions,
+  { model, perspective, opening }: ExplainOptions,
   effort: Effort,
+  lines = boardLines(grade),
 ): Request {
   const messages: Anthropic.Beta.BetaMessageParam[] = [
-    { role: "user", content: describeMove(grade, history, perspective) },
+    { role: "user", content: describeMove(grade, history, perspective, lines, opening) },
     {
       role: "assistant",
       content: `${explanation.summary}\n${stepList(explanation.steps)}\nLesson: ${explanation.lesson}`,
@@ -380,13 +397,19 @@ function numberedMoveMap(line: BoardLine): Record<string, string> {
   return Object.fromEntries(numberedMoves(line.fen, line.moves).map((move, i) => [String(i + 1), move]));
 }
 
-function describeMove(grade: MoveGrade, history: string[], perspective: Perspective): string {
+function describeMove(
+  grade: MoveGrade,
+  history: string[],
+  perspective: Perspective,
+  lines: Record<string, BoardLine>,
+  opening?: OpeningContext,
+): string {
   const mover = grade.mover === "w" ? "White" : "Black";
   const other = grade.mover === "w" ? "Black" : "White";
   const played = numberedLine(grade.fenBefore, [grade.played.san]);
-  const lines = boardLines(grade);
   const about: Record<string, string> = {
     played: `The move played, then the engine's best play for both sides (evaluation after the move: ${grade.evalAfter})`,
+    book: "The opening book's line from the position before the move: how the opening usually goes on",
   };
   grade.bestMoves.forEach((best, i) => {
     about[`best${i + 1}`] = `Engine choice ${i + 1} (evaluation ${best.eval})`;
@@ -405,10 +428,41 @@ function describeMove(grade: MoveGrade, history: string[], perspective: Perspect
       Object.entries(lines).map(([id, line]) => [id, { about: about[id], moves: numberedMoveMap(line) }]),
     ),
     computedFacts: grade.motifs,
+    ...(opening && { opening: openingFacts(grade, opening) }),
   };
-  const ask =
-    perspective === "mine"
+  const ask = opening
+    ? openingQuestion(played, mover, perspective === "mine" ? mover : other, opening, grade.fenBefore)
+    : perspective === "mine"
       ? `Explain my move ${played} (I am ${mover}).`
       : `Explain my opponent's move ${played}. My opponent is ${mover}; I am ${other}.`;
   return `${ask}\n\nEngine facts, written from ${mover}'s side:\n${JSON.stringify(facts, null, 2)}`;
+}
+
+/** Book moves named in the facts; the rest are rarely played. */
+const MAX_BOOK_MOVES = 6;
+
+function bookMoveList(fen: string, moves: string[]): string[] {
+  return moves.slice(0, MAX_BOOK_MOVES).map((san) => numberedLine(fen, [san]));
+}
+
+function openingFacts(grade: MoveGrade, opening: OpeningContext) {
+  return {
+    learning: opening.studying,
+    positionAfterMoveIsCalled: opening.reached ?? "(no name of its own)",
+    isBookMove: opening.bookMove,
+    bookMovesInPositionBefore:
+      opening.bookMoves.length > 0 ? bookMoveList(grade.fenBefore, opening.bookMoves) : "none: the position is past the opening book",
+  };
+}
+
+function openingQuestion(played: string, mover: string, side: string, opening: OpeningContext, fen: string): string {
+  const learning = `I'm learning the ${opening.studying} as ${side}.`;
+  if (opening.bookMove) {
+    return `${learning} Explain ${played}, a book move for ${mover}: the idea behind it, the plan it belongs to, and what to watch for.`;
+  }
+  if (opening.bookMoves.length > 0) {
+    const book = bookMoveList(fen, opening.bookMoves).slice(0, 3).join(" or ");
+    return `${learning} Instead of a book move (${book}), ${mover} played ${played}. Explain how it compares with the book.`;
+  }
+  return `${learning} The moves have left the opening book. Explain ${mover}'s move ${played}.`;
 }

@@ -114,10 +114,21 @@ function MoveCell({
       title={cls ? CLASSIFICATION[cls].label : undefined}
       aria-current={selected ? "step" : undefined}
       aria-label={
-        cls ? `${move.san}, ${CLASSIFICATION[cls].label}` : move.gradeError ? `${move.san}, analysis failed` : move.san
+        cls
+          ? `${move.san}, ${CLASSIFICATION[cls].label}`
+          : move.gradeError
+            ? `${move.san}, analysis failed`
+            : move.book
+              ? `${move.san}, book move`
+              : move.san
       }
     >
       <span>{move.san}</span>
+      {move.book && !cls && !pending && (
+        <span className="badge book" title="Book move">
+          <BookIcon />
+        </span>
+      )}
       {pending && <span className="badge pending" aria-label="Analyzing" />}
       {move.gradeError && (
         <span className="badge error" title="Analysis failed">
@@ -126,6 +137,15 @@ function MoveCell({
       )}
       {cls && <span className={`badge ${cls}`}>{CLASSIFICATION[cls].symbol}</span>}
     </button>
+  );
+}
+
+/** An open book, as chess.com marks book moves. */
+function BookIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden>
+      <path d="M12 6.5C9.5 5 6.5 4.8 4 5.6v12.6c2.5-.8 5.5-.6 8 .9 2.5-1.5 5.5-1.7 8-.9V5.6c-2.5-.8-5.5-.6-8 .9zM12 6.5v12.6" />
+    </svg>
   );
 }
 

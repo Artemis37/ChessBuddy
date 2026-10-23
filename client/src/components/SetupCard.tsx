@@ -1,5 +1,5 @@
 import { BOT_RATINGS, botRatingLabel, type BotRating } from "../../../shared/types";
-import type { Settings } from "../game";
+import type { Mode, Settings } from "../game";
 
 interface Props {
   draft: Settings;
@@ -7,26 +7,34 @@ interface Props {
   onNewGame: () => void;
 }
 
+const MODES: { mode: Mode; label: string }[] = [
+  { mode: "bot", label: "Play the bot" },
+  { mode: "both", label: "Play both sides" },
+  { mode: "learn", label: "Learn openings" },
+];
+
+const HELP: Record<Mode, string> = {
+  bot: "Bot ratings are estimates on the Chess.com scale. Only your moves are graded.",
+  both: "You move both colors and every move is graded. My color sits at the bottom of the board.",
+  learn:
+    "Step through an opening with → or its book moves, and play your own moves anywhere to explore. Explain any move to learn the idea behind it.",
+};
+
 export function SetupCard({ draft, onChange, onNewGame }: Props) {
   return (
     <section className="card setup">
       <div className="segmented" role="radiogroup" aria-label="Mode">
-        <button
-          role="radio"
-          aria-checked={draft.mode === "bot"}
-          className={draft.mode === "bot" ? "on" : ""}
-          onClick={() => onChange({ ...draft, mode: "bot" })}
-        >
-          Play the bot
-        </button>
-        <button
-          role="radio"
-          aria-checked={draft.mode === "both"}
-          className={draft.mode === "both" ? "on" : ""}
-          onClick={() => onChange({ ...draft, mode: "both" })}
-        >
-          Play both sides
-        </button>
+        {MODES.map(({ mode, label }) => (
+          <button
+            key={mode}
+            role="radio"
+            aria-checked={draft.mode === mode}
+            className={draft.mode === mode ? "on" : ""}
+            onClick={() => onChange({ ...draft, mode })}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
       <div className="setup-row">
@@ -60,15 +68,13 @@ export function SetupCard({ draft, onChange, onNewGame }: Props) {
           </label>
         )}
 
-        <button className="primary" onClick={onNewGame}>
-          New game
-        </button>
+        {draft.mode !== "learn" && (
+          <button className="primary" onClick={onNewGame}>
+            New game
+          </button>
+        )}
       </div>
-      <p className="muted small">
-        {draft.mode === "bot"
-          ? "Bot ratings are estimates on the Chess.com scale. Only your moves are graded."
-          : "You move both colors and every move is graded. My color sits at the bottom of the board."}
-      </p>
+      <p className="muted small">{HELP[draft.mode]}</p>
     </section>
   );
 }
