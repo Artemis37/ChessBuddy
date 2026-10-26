@@ -17,6 +17,7 @@
     "test": "vitest run",
     "calibrate": "tsx scripts/calibrate-bot.ts",
     "openings:build": "tsx scripts/build-openings.ts",
+    "sounds:build": "tsx scripts/build-sounds.ts",
     "password:hash": "tsx scripts/hash-password.ts"
   },
   "engines": {

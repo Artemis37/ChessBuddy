@@ -18,11 +18,13 @@ import {
   type StatusResponse,
 } from "../../shared/types";
 import { api } from "./api";
+import { isMuted, listenForUnlock, playSound, setMuted } from "./board/audio";
 import { Board, type BoardArrow } from "./board/Board";
 import { EvalBar } from "./board/EvalBar";
 import { capturedBy, capturedInPosition, materialBalance } from "./board/material";
 import type { Premove } from "./board/placement";
 import { PlayerBar } from "./board/PlayerBar";
+import { lastMoveSound, stepSound } from "./board/sound";
 import { MoveList } from "./components/MoveList";
 import { MovePanel } from "./components/MovePanel";
 import { OpeningsCard } from "./components/OpeningsCard";
@@ -132,6 +134,7 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
   const [study, setStudy] = useState<OpeningLine | null>(null);
   /** The book move under the pointer, with the position it was listed for. */
   const [bookHover, setBookHover] = useState<{ fen: string; uci: string } | null>(null);
+  const [soundOn, setSoundOn] = useState(() => !isMuted());
   const nextId = useRef(1);
   /** Bumped whenever the move list is rewritten, so late bot replies are dropped. */
   const gameToken = useRef(0);
@@ -146,8 +149,11 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
   const turn = game.turn();
   const result = resultText(game);
   const live = viewPly === null || viewPly >= moves.length;
+  const shownCount = live ? moves.length : viewPly!;
   const learning = settings.mode === "learn";
   const humanTurn = settings.mode === "both" || turn === settings.myColor;
+  /** The bot's quiet moves sound different from yours, as the opponent's do on chess.com. */
+  const botColor: Color | null = settings.mode === "bot" ? other(settings.myColor) : null;
   const coachModel =
     chosenModel && COACH_MODELS.some((m) => m.id === chosenModel)
       ? chosenModel
@@ -173,6 +179,8 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
       document.removeEventListener("visibilitychange", load);
     };
   }, []);
+
+  useEffect(() => listenForUnlock(), []);
 
   useEffect(() => {
     fetch("/openings.json")
@@ -231,10 +239,11 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
         graded: settings.mode === "both" || made.color === settings.myColor,
       };
       setMoves((list) => [...list, move]);
+      playSound(lastMoveSound([...moves.map((m) => m.uci), move.uci], botColor));
       if (move.graded) grade(move);
       return true;
     },
-    [fen, settings.mode, settings.myColor, grade],
+    [fen, moves, settings.mode, settings.myColor, botColor, grade],
   );
 
   // The bot replies whenever it is its turn.
@@ -285,15 +294,19 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
         : (activePath(walkMove.thread)[walkthrough.reply]?.exchange.reply.steps ?? []);
   const walkStep = walkthrough ? walkSteps[walkthrough.step] : undefined;
 
-  // Plays the current step's moves one at a time.
+  // Plays the current step's moves one at a time, each with its sound.
   useEffect(() => {
     if (!walkthrough || !walkStep || walkthrough.played >= walkStep.moves.length) return;
     const timer = setTimeout(
-      () => setWalkthrough((w) => w && { ...w, played: w.played + 1 }),
+      () => {
+        const shown = walkStep.moves.slice(0, walkthrough.played + 1).map((m) => m.uci);
+        playSound(lastMoveSound(shown, botColor, walkStep.fen));
+        setWalkthrough((w) => w && { ...w, played: w.played + 1 });
+      },
       walkthrough.played === 0 ? STEP_START_MS : STEP_MOVE_MS,
     );
     return () => clearTimeout(timer);
-  }, [walkthrough, walkStep]);
+  }, [walkthrough, walkStep, botColor]);
 
   /** Plays a step of a move's explanation, or of one of its answers, on the board from its start. */
   const showStep = useCallback((moveId: number, step: number, reply: number | null = null) => {
@@ -355,13 +368,13 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
   const goTo = useCallback(
     (ply: number) => {
       const clamped = Math.max(0, Math.min(moves.length, ply));
+      playSound(stepSound(moves.map((m) => m.uci), shownCount, clamped, botColor));
       setViewPly(clamped >= moves.length ? null : clamped);
       if (clamped < moves.length) setPremoves([]);
       setWalkthrough(null);
     },
-    [moves.length],
+    [moves, shownCount, botColor],
   );
-  const shownCount = live ? moves.length : viewPly!;
 
   // Arrow keys step through the game, as on chess.com; during an explanation they step through
   // its steps, and Esc goes back to the game.
@@ -490,6 +503,13 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
     }
   };
 
+  /** Turns move sounds on or off; turning them on plays a move, so you hear the volume. */
+  const toggleSound = () => {
+    setMuted(soundOn);
+    setSoundOn(!soundOn);
+    if (!soundOn) playSound("move");
+  };
+
   const displayFen = shownCount === 0 ? START_FEN : moves[shownCount - 1].fenAfter;
   const shownMove = shownCount > 0 ? moves[shownCount - 1] : null;
   // Learning an opening, the panel follows the board even through ungraded book moves.
@@ -527,6 +547,7 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
     setMoves([...moves.slice(0, shownCount), move]);
     setViewPly(null);
     setWalkthrough(null);
+    playSound(lastMoveSound([...moves.slice(0, shownCount).map((m) => m.uci), move.uci]));
     if (move.graded) grade(move);
     return true;
   };
@@ -692,6 +713,14 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
               <button onClick={() => setFlipped((f) => !f)} title="Turn the board around">
                 <span aria-hidden>⇅</span> Flip board
               </button>
+              <button
+                className="sound-toggle"
+                onClick={toggleSound}
+                aria-pressed={soundOn}
+                title={soundOn ? "Mute move sounds" : "Turn move sounds on"}
+              >
+                <SoundIcon on={soundOn} /> Sound
+              </button>
             </div>
 
             {result && live && <div className="banner result">{result}</div>}
@@ -760,6 +789,16 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
         </aside>
       </main>
     </div>
+  );
+}
+
+/** A speaker, with sound waves when sound is on and crossed out when it is off. */
+function SoundIcon({ on }: { on: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden>
+      <path className="speaker" d="M3 9.5h4l5-4v13l-5-4H3z" />
+      <path d={on ? "M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11" : "M16 9.5l5 5M21 9.5l-5 5"} />
+    </svg>
   );
 }
 

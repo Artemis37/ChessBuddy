@@ -692,6 +692,30 @@ select {
   padding-left: 34px;
 }
 
+.sound-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.sound-toggle svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sound-toggle svg .speaker {
+  fill: currentColor;
+}
+
+.sound-toggle[aria-pressed="false"] {
+  color: var(--text-body);
+}
+
 .banner {
   display: flex;
   align-items: center;
