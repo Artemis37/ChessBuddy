@@ -11,6 +11,7 @@ const MODES: { mode: Mode; label: string }[] = [
   { mode: "bot", label: "Play the bot" },
   { mode: "both", label: "Play both sides" },
   { mode: "learn", label: "Learn openings" },
+  { mode: "review", label: "Review a game" },
 ];
 
 const HELP: Record<Mode, string> = {
@@ -18,6 +19,8 @@ const HELP: Record<Mode, string> = {
   both: "You move both colors and every move is graded. My color sits at the bottom of the board.",
   learn:
     "Step through an opening with → or its book moves, and play your own moves anywhere to explore. Explain any move to learn the idea behind it.",
+  review:
+    "Load one of your Chess.com games, or paste a game link or PGN. Every move of both sides is graded; My color sits at the bottom of the board.",
 };
 
 export function SetupCard({ draft, onChange, onNewGame }: Props) {
@@ -68,7 +71,7 @@ export function SetupCard({ draft, onChange, onNewGame }: Props) {
           </label>
         )}
 
-        {draft.mode !== "learn" && (
+        {draft.mode !== "learn" && draft.mode !== "review" && (
           <button className="primary" onClick={onNewGame}>
             New game
           </button>

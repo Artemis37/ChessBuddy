@@ -2,7 +2,7 @@ import type { PieceSymbol } from "chess.js";
 import type { BotRating, Classification, Color, Explanation, MoveGrade } from "../../shared/types";
 import type { Branches } from "./thread";
 
-export type Mode = "bot" | "both" | "learn";
+export type Mode = "bot" | "both" | "learn" | "review";
 
 export interface Settings {
   mode: Mode;
@@ -20,8 +20,8 @@ export interface PlayedMove {
   fenBefore: string;
   fenAfter: string;
   /**
-   * Graded automatically: the player's own moves, every move when playing both sides, or moves
-   * off the book when learning an opening. Others only when asked.
+   * Graded automatically: the player's own moves, every move when playing both sides or reviewing
+   * a game, or moves off the book when learning an opening. Others only when asked.
    */
   graded: boolean;
   /** Learning an opening: the move is in the opening book. */

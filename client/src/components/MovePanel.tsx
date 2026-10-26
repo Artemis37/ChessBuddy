@@ -18,6 +18,11 @@ interface Props {
   bothSides: boolean;
   /** Learning an opening: you move both sides, and book moves are graded only when asked. */
   learning: boolean;
+  /**
+   * Reviewing a game: how many moves are the game's own. They are all graded, and can't be
+   * retried, which would cut the game short. 0 otherwise.
+   */
+  imported: number;
   onBoard: boolean;
   coach: StatusResponse["coach"] | null;
   model: string;
@@ -41,6 +46,7 @@ export function MovePanel({
   myColor,
   bothSides,
   learning,
+  imported,
   onBoard,
   coach,
   model,
@@ -54,6 +60,7 @@ export function MovePanel({
   onAsk,
   onShowVersion,
 }: Props) {
+  const reviewing = imported > 0;
   if (!move || index === null) {
     return (
       <section className="card panel">
@@ -61,7 +68,9 @@ export function MovePanel({
         <p className="muted">
           {learning
             ? "Step to a move to review it here, and explain it to learn the idea behind it."
-            : bothSides
+            : reviewing
+              ? "Every move of the game, White's and Black's, gets graded. Step through it with → or click a move to review it here."
+              : bothSides
               ? "Every move, White's and Black's, gets graded here. Click any move in the list to review it."
               : `Every ${colorName(myColor)} move you play gets graded here. Click any move in the list to review it, including your opponent's.`}
         </p>
@@ -75,7 +84,7 @@ export function MovePanel({
     ? `${colorName(move.color)} · ${move.book ? "book move" : "off the book"}`
     : mine
       ? "Your move"
-      : bothSides
+      : bothSides && !reviewing
         ? `The other side's move (${colorName(move.color)})`
         : `Your opponent's move (${colorName(move.color)})`;
   const explainActions = (
@@ -138,7 +147,7 @@ export function MovePanel({
   const thread = activePath(move.thread);
   const busy = Boolean(move.asking) || Boolean(move.explaining);
   // Learning an opening, every move off the book is one you tried.
-  const retryable = learning ? !move.book : mine;
+  const retryable = learning ? !move.book : mine && index >= imported;
   const explanation = move.explanation;
 
   return (

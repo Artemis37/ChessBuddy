@@ -10,9 +10,21 @@ export interface Analyzer {
 
 const LINE_PLIES = 8;
 const MATERIAL_NOTE_THRESHOLD = 2;
+/** Engine lines grading needs in the position before a move. */
+const GRADE_LINES = 3;
 
-/** Grades one move with the engine and gathers the facts the coach is allowed to use. */
-export async function gradeMove(engine: Analyzer, fenBefore: string, uci: string, depth: number): Promise<MoveGrade> {
+/**
+ * Grades one move with the engine and gathers the facts the coach is allowed to use.
+ * With `nextGraded`, the move after this one will be graded too, so the position after the move
+ * is analyzed with the lines that grade needs, and a cached analyzer searches it only once.
+ */
+export async function gradeMove(
+  engine: Analyzer,
+  fenBefore: string,
+  uci: string,
+  depth: number,
+  { nextGraded = false }: { nextGraded?: boolean } = {},
+): Promise<MoveGrade> {
   const board = new Chess(fenBefore);
   const mover = board.turn();
   const move = board.move(toMoveInput(uci)); // throws on an illegal move
@@ -21,8 +33,8 @@ export async function gradeMove(engine: Analyzer, fenBefore: string, uci: string
   const gameOver = board.isGameOver();
 
   const [before, after] = await Promise.all([
-    engine.analyze(fenBefore, { multipv: 3, depth }),
-    gameOver ? Promise.resolve([]) : engine.analyze(fenAfter, { multipv: 1, depth }),
+    engine.analyze(fenBefore, { multipv: GRADE_LINES, depth }),
+    gameOver ? Promise.resolve([]) : engine.analyze(fenAfter, { multipv: nextGraded ? GRADE_LINES : 1, depth }),
   ]);
   if (before.length === 0) throw new Error("Engine returned no analysis for the position");
 

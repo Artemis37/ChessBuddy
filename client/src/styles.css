@@ -780,7 +780,7 @@ select {
 
 .segmented {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 4px;
   padding: 4px;
   background: #1f1e1b;
@@ -983,6 +983,139 @@ select {
   color: #fff;
   font-size: 11px;
   font-weight: 700;
+}
+
+/* Reviewing a game */
+
+.review h3 {
+  margin: 14px 0 6px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.review .search {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.review .search::placeholder {
+  color: var(--muted);
+}
+
+.review .search:focus {
+  outline: none;
+  border-color: var(--green);
+}
+
+.review-user {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.review-user .search {
+  flex: 1;
+  min-width: 0;
+}
+
+.review .paste {
+  resize: vertical;
+  min-height: 64px;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+}
+
+.review .owner a {
+  color: var(--text-body);
+}
+
+.outcome.won {
+  color: var(--green);
+}
+
+.outcome.lost {
+  color: var(--error);
+}
+
+.progress {
+  height: 6px;
+  margin-top: 12px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.progress div {
+  height: 100%;
+  background: var(--green);
+  transition: width 0.3s ease;
+}
+
+.review-table {
+  width: 100%;
+  margin-top: 12px;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.review-table th,
+.review-table td {
+  padding: 4px 6px;
+  text-align: center;
+  font-weight: 400;
+}
+
+.review-table thead th {
+  vertical-align: bottom;
+  border-bottom: 1px solid var(--border);
+}
+
+.review-table tbody th {
+  text-align: left;
+  white-space: nowrap;
+}
+
+.review-table td {
+  width: 32%;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.review-player {
+  display: block;
+  color: var(--text);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.review-table .muted {
+  font-size: 12px;
+}
+
+.review-table .accuracy td {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.review-table .chesscom-accuracy th,
+.review-table .chesscom-accuracy td {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.review-table .badge {
+  display: inline-block;
+  margin-right: 4px;
 }
 
 /* Move list */

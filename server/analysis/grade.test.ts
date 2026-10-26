@@ -100,4 +100,25 @@ describe("gradeMove", () => {
     const engine = fakeEngine({ [ITALIAN_START]: beforeLines });
     await expect(gradeMove(engine, ITALIAN_START, "e1e3", 16)).rejects.toThrow();
   });
+
+  it("analyzes the position after the move with three lines when the next move will be graded too", async () => {
+    const afterBb5 = "r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3";
+    const requests: [string, number][] = [];
+    const engine: Analyzer = {
+      async analyze(fen, { multipv }) {
+        requests.push([fen, multipv]);
+        return fen === ITALIAN_START ? beforeLines : [{ score: { cp: -38 }, pv: ["a7a6", "b5a4"] }];
+      },
+    };
+
+    await gradeMove(engine, ITALIAN_START, "f1b5", 16);
+    await gradeMove(engine, ITALIAN_START, "f1b5", 16, { nextGraded: true });
+
+    expect(requests).toEqual([
+      [ITALIAN_START, 3],
+      [afterBb5, 1],
+      [ITALIAN_START, 3],
+      [afterBb5, 3],
+    ]);
+  });
 });

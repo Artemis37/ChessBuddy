@@ -33,7 +33,8 @@ export const api = {
   logout: () => request<{ ok: true }>("/api/auth/logout", {}),
   status: () => request<StatusResponse>("/api/status"),
   botMove: (fen: string, rating: BotRating) => request<BotMoveResponse>("/api/bot-move", { fen, rating }),
-  grade: (fen: string, uci: string) => request<MoveGrade>("/api/grade", { fen, uci }),
+  /** With nextGraded, the next move will be graded too, so the server searches the position between them once. */
+  grade: (fen: string, uci: string, nextGraded = false) => request<MoveGrade>("/api/grade", { fen, uci, nextGraded }),
   evaluate: (fen: string) => request<PositionEval>("/api/eval", { fen }),
   explain: (grade: MoveGrade, history: string[], model: string, perspective: Perspective, opening?: OpeningContext) =>
     request<Explanation>("/api/explain", { grade, history, model, perspective, opening }),

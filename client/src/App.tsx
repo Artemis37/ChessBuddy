@@ -28,8 +28,10 @@ import { lastMoveSound, stepSound } from "./board/sound";
 import { MoveList } from "./components/MoveList";
 import { MovePanel } from "./components/MovePanel";
 import { OpeningsCard } from "./components/OpeningsCard";
+import { ReviewCard } from "./components/ReviewCard";
 import { SetupCard } from "./components/SetupCard";
 import { colorName, moveNumber, type PlayedMove, type Settings } from "./game";
+import { nextToGrade, scoreOf, type ReviewGame } from "./review";
 import { activePath, addExchange, showVersion } from "./thread";
 
 const START_FEN = new Chess().fen();
@@ -46,6 +48,8 @@ const BOT_MIN_THINK_MS = 400;
 /** Pause before a premove is played, so the opponent's move is seen first. */
 const PREMOVE_DELAY_MS = 120;
 const MODEL_KEY = "chessbuddy.coachModel";
+/** Moves graded at once while reviewing a game: the engine container runs two Stockfish processes. */
+const REVIEW_PARALLEL = 2;
 
 function toMove(uci: string) {
   return { from: uci.slice(0, 2) as Square, to: uci.slice(2, 4) as Square, promotion: uci[4] };
@@ -70,8 +74,8 @@ function scoreText(game: Chess): string {
   return "*";
 }
 
-/** An opening line's moves from the starting position, as book moves on the board. */
-function lineMoves(sans: string[], ids: { current: number }): PlayedMove[] {
+/** Moves from the starting position: an opening line's, as book moves, or a game's, to be graded. */
+function lineMoves(sans: string[], ids: { current: number }, kind: "book" | "graded" = "book"): PlayedMove[] {
   const board = new Chess();
   return sans.map((san) => {
     const fenBefore = board.fen();
@@ -84,10 +88,15 @@ function lineMoves(sans: string[], ids: { current: number }): PlayedMove[] {
       captured: made.captured,
       fenBefore,
       fenAfter: board.fen(),
-      graded: false,
-      book: true,
+      graded: kind === "graded",
+      book: kind === "book",
     };
   });
+}
+
+/** Ends a sentence that may not have a full stop, such as a PGN's Termination. */
+function sentence(text: string): string {
+  return /[.!?]$/.test(text) ? text : `${text}.`;
 }
 
 function lastGradedIndex(moves: PlayedMove[]): number | null {
@@ -135,6 +144,13 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
   /** The book move under the pointer, with the position it was listed for. */
   const [bookHover, setBookHover] = useState<{ fen: string; uci: string } | null>(null);
   const [soundOn, setSoundOn] = useState(() => !isMuted());
+  /** The game being reviewed; its moves come first in the move list. */
+  const [review, setReview] = useState<ReviewGame | null>(null);
+  const [tabHidden, setTabHidden] = useState(() => document.hidden);
+  /** Review grades waiting for the server, including ones for a game since replaced. */
+  const reviewInFlight = useRef(0);
+  /** Counts settled review grades, so the queue looks for the next move once one is free. */
+  const [reviewSettled, setReviewSettled] = useState(0);
   const nextId = useRef(1);
   /** Bumped whenever the move list is rewritten, so late bot replies are dropped. */
   const gameToken = useRef(0);
@@ -151,9 +167,16 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
   const live = viewPly === null || viewPly >= moves.length;
   const shownCount = live ? moves.length : viewPly!;
   const learning = settings.mode === "learn";
-  const humanTurn = settings.mode === "both" || turn === settings.myColor;
-  /** The bot's quiet moves sound different from yours, as the opponent's do on chess.com. */
-  const botColor: Color | null = settings.mode === "bot" ? other(settings.myColor) : null;
+  const reviewed = settings.mode === "review" ? review : null;
+  const reviewing = reviewed !== null;
+  /** How many moves come from the reviewed game; any after them were played on from its end. */
+  const imported = reviewed?.moves.length ?? 0;
+  // Reviewing a game, you can play on from its end with both colors.
+  const humanTurn = settings.mode === "both" || reviewing || turn === settings.myColor;
+  /** The bot's quiet moves, or the opponent's in a reviewed game, sound different from yours, as on chess.com. */
+  const botColor: Color | null = settings.mode === "bot" || reviewing ? other(settings.myColor) : null;
+  /** A move of the reviewed game couldn't be graded, so grading the rest waits for Resume. */
+  const reviewStopped = reviewing && moves.some((m) => m.gradeError);
   const coachModel =
     chosenModel && COACH_MODELS.some((m) => m.id === chosenModel)
       ? chosenModel
@@ -200,11 +223,14 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
     setMoves((list) => list.map((m) => (m.id === id ? { ...m, ...patch } : m)));
   }, []);
 
-  /** Grades a move; resolves to null if the engine fails, which the move then shows. */
+  /**
+   * Grades a move; resolves to null if the engine fails, which the move then shows. With
+   * `nextGraded`, the next move gets graded too (see api.grade).
+   */
   const grade = useCallback(
-    (move: PlayedMove): Promise<MoveGrade | null> => {
+    (move: PlayedMove, nextGraded = false): Promise<MoveGrade | null> => {
       updateMove(move.id, { grading: true, gradeError: undefined });
-      return api.grade(move.fenBefore, move.uci).then(
+      return api.grade(move.fenBefore, move.uci, nextGraded).then(
         (g) => {
           updateMove(move.id, { grade: g, grading: false });
           return g;
@@ -236,15 +262,38 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
         fenBefore: fen,
         fenAfter: board.fen(),
         // Playing both sides you move every piece, so every move is graded.
-        graded: settings.mode === "both" || made.color === settings.myColor,
+        graded: settings.mode === "both" || reviewing || made.color === settings.myColor,
       };
       setMoves((list) => [...list, move]);
       playSound(lastMoveSound([...moves.map((m) => m.uci), move.uci], botColor));
-      if (move.graded) grade(move);
+      // Reviewing a game, the grading queue below takes it, keeping to its limit. Playing both
+      // sides, the next move will be graded too.
+      if (move.graded && !reviewing) grade(move, settings.mode === "both");
       return true;
     },
-    [fen, moves, settings.mode, settings.myColor, botColor, grade],
+    [fen, moves, settings.mode, settings.myColor, reviewing, botColor, grade],
   );
+
+  useEffect(() => {
+    const onVisibility = () => setTabHidden(document.hidden);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
+
+  // Reviewing a game grades every move, REVIEW_PARALLEL at a time so the engine isn't swamped,
+  // the one on the board first. None start while the tab is hidden, and a failure stops the queue
+  // until Resume. Each grade analyzes the position after its move the way the next grade needs,
+  // so the server's cache answers that grade's first search.
+  useEffect(() => {
+    if (!reviewing || tabHidden || reviewStopped) return;
+    for (const index of nextToGrade(moves, shownCount - 1, REVIEW_PARALLEL - reviewInFlight.current)) {
+      reviewInFlight.current++;
+      grade(moves[index], index < moves.length - 1).finally(() => {
+        reviewInFlight.current--;
+        setReviewSettled((n) => n + 1);
+      });
+    }
+  }, [reviewing, tabHidden, reviewStopped, moves, shownCount, grade, reviewSettled]);
 
   // The bot replies whenever it is its turn.
   useEffect(() => {
@@ -333,6 +382,7 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
     setBotError(null);
     setWalkthrough(null);
     setStudy(null);
+    setReview(null);
   };
 
   /** Starts learning an opening line from its first position, with its moves ready to step through. */
@@ -340,6 +390,7 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
     gameToken.current++;
     setSettings({ ...draft, mode: "learn" });
     setStudy(line);
+    setReview(null);
     setMoves(lineMoves(line.moves, nextId));
     setViewPly(0);
     setPremoves([]);
@@ -348,16 +399,43 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
     setWalkthrough(null);
   };
 
+  /**
+   * Starts reviewing a game from its first position, with `myColor` (if known, otherwise the one
+   * picked) at the bottom. Its moves are graded from there.
+   */
+  const startReview = (loaded: ReviewGame, myColor: Color | null) => {
+    gameToken.current++;
+    const next: Settings = { ...draft, mode: "review", myColor: myColor ?? draft.myColor };
+    setDraft(next);
+    setSettings(next);
+    setReview(loaded);
+    setStudy(null);
+    setMoves(lineMoves(loaded.moves.map((m) => m.san), nextId, "graded"));
+    setViewPly(0);
+    setPremoves([]);
+    setFlipped(false);
+    setBotError(null);
+    setWalkthrough(null);
+  };
+
+  /** Clears the failures that stopped grading the reviewed game, so the queue tries those moves again. */
+  const resumeReview = () => {
+    setMoves((list) => list.map((m) => (m.gradeError ? { ...m, gradeError: undefined } : m)));
+  };
+
   const changeDraft = (next: Settings) => {
     setDraft(next);
-    // While learning an opening, your color only turns the board, so it applies at once.
-    if (settings.mode === "learn" && next.mode === "learn") setSettings((s) => ({ ...s, myColor: next.myColor }));
+    // While learning an opening or reviewing a game, your color only turns the board and decides
+    // whose moves are yours, so it applies at once.
+    if (next.mode === settings.mode && (learning || reviewing)) setSettings((s) => ({ ...s, myColor: next.myColor }));
   };
 
   const retry = (index: number) => rewind(moves.length - index);
 
   // In bot mode, undo takes back the bot's reply together with your move, so it is your turn again.
-  const canUndo = settings.mode === "bot" ? moves.some((m) => m.color === settings.myColor) : moves.length > 0;
+  // A reviewed game's own moves stay; only moves played on from its end can be taken back.
+  const canUndo =
+    settings.mode === "bot" ? moves.some((m) => m.color === settings.myColor) : moves.length > imported;
   const undo = () => {
     if (!canUndo) return;
     const last = moves[moves.length - 1];
@@ -572,7 +650,12 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
     return map;
   }, [moves]);
   const evaluation = gradeEvals.get(displayFen) ?? evals[displayFen] ?? null;
-  const gradeComing = moves.some((m) => m.grading && (m.fenAfter === displayFen || m.fenBefore === displayFen));
+  // Reviewing a game, a move waiting in the grading queue will bring its positions' evaluations.
+  const gradeComing = moves.some(
+    (m) =>
+      (m.grading || (reviewing && !reviewStopped && m.graded && !m.grade)) &&
+      (m.fenAfter === displayFen || m.fenBefore === displayFen),
+  );
   useEffect(() => {
     if (evaluation || gradeComing || evalRequested.current.has(displayFen)) return;
     evalRequested.current.add(displayFen);
@@ -629,18 +712,28 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
   const premoveColor: Color | null =
     live && !walkView && !result && settings.mode === "bot" && turn !== settings.myColor ? settings.myColor : null;
   const botLabel = settings.rating === "max" ? "Maximum" : `${settings.rating}`;
+  /** At the end of a reviewed game: how it ended, such as a resignation the board can't show. */
+  const atReviewEnd = reviewed !== null && moves.length === imported;
+  const gameEnd = atReviewEnd && reviewed.termination ? sentence(reviewed.termination) : null;
 
+  const reviewedPlayer = (color: Color) => (reviewed ? reviewed[color === "w" ? "white" : "black"] : null);
   const playerName = (color: Color) =>
-    color === settings.myColor ? "You" : settings.mode === "bot" ? "Stockfish" : colorName(color);
+    reviewedPlayer(color)?.name ??
+    (color === settings.myColor ? "You" : settings.mode === "bot" ? "Stockfish" : colorName(color));
   const playerBar = (color: Color) => {
     const mine = color === settings.myColor;
-    const detail = mine
-      ? settings.mode !== "bot"
-        ? colorName(color)
-        : undefined
-      : settings.mode === "bot"
-        ? botLabel
-        : "you move it";
+    const rating = reviewedPlayer(color)?.rating;
+    const detail = reviewing
+      ? rating
+        ? `${rating}`
+        : colorName(color)
+      : mine
+        ? settings.mode !== "bot"
+          ? colorName(color)
+          : undefined
+        : settings.mode === "bot"
+          ? botLabel
+          : "you move it";
     return (
       <PlayerBar
         name={playerName(color)}
@@ -723,7 +816,7 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
               </button>
             </div>
 
-            {result && live && <div className="banner result">{result}</div>}
+            {(gameEnd ?? result) && live && <div className="banner result">{gameEnd ?? result}</div>}
             {botError && (
               <div className="banner error">
                 The bot couldn't move: {botError}
@@ -750,13 +843,23 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
               onBackToLine={backToLine}
             />
           )}
+          {(draft.mode === "review" || reviewing) && (
+            <ReviewCard
+              game={reviewed}
+              moves={moves}
+              myColor={settings.myColor}
+              stopped={reviewStopped}
+              onLoad={startReview}
+              onResume={resumeReview}
+            />
+          )}
           <MoveList
             moves={moves}
             current={shownCount - 1}
             opening={opening}
             white={playerName("w")}
             black={playerName("b")}
-            score={scoreText(game)}
+            score={atReviewEnd ? scoreOf(reviewed.result) : scoreText(game)}
             onSelect={(i) => goTo(i + 1)}
             onFirst={() => goTo(0)}
             onPrevious={() => goTo(shownCount - 1)}
@@ -767,8 +870,9 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
             move={panelIndex === null ? undefined : moves[panelIndex]}
             index={panelIndex}
             myColor={settings.myColor}
-            bothSides={settings.mode === "both"}
+            bothSides={settings.mode === "both" || reviewing}
             learning={learning}
+            imported={imported}
             onBoard={learning || (!live && panelIndex === shownCount - 1)}
             coach={status?.coach ?? null}
             model={coachModel}

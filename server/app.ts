@@ -172,13 +172,16 @@ export function createApp({ analyzer: engine, bot, coach, auth, analysisDepth, d
   });
 
   app.post("/api/grade", async (req, res) => {
-    const body = parse(z.object({ fen, uci }), req.body);
+    // nextGraded: the client grades the next move too (reviewing a whole game).
+    const body = parse(z.object({ fen, uci, nextGraded: z.boolean().default(false) }), req.body);
     try {
       new Chess(body.fen).move(toMoveInput(body.uci));
     } catch {
       throw new BadRequest("Illegal move for this position");
     }
-    const grade = await withEngine("analyzer", () => gradeMove(analyzer, body.fen, body.uci, analysisDepth));
+    const grade = await withEngine("analyzer", () =>
+      gradeMove(analyzer, body.fen, body.uci, analysisDepth, { nextGraded: body.nextGraded }),
+    );
     res.json(grade satisfies MoveGrade);
   });
 

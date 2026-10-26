@@ -213,6 +213,39 @@ describe("POST /api/grade", () => {
     expect((body as MoveGrade).motifs).toContain("Your move ends the game in a draw.");
   });
 
+  it("searches a position once when grading consecutive moves of a game with nextGraded", async () => {
+    const searched: string[] = [];
+    const afterE4 = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1";
+    const lines: Record<string, EngineLine> = {
+      [START]: { score: { cp: 30 }, pv: ["e2e4", "e7e5"] },
+      [afterE4]: { score: { cp: -30 }, pv: ["e7e5", "g1f3"] },
+    };
+    const call = await start({
+      analyzer: fakeAnalyzer({
+        analyze: async (fen) => {
+          searched.push(fen);
+          return [lines[fen] ?? { score: { cp: 30 }, pv: ["g1f3"] }];
+        },
+      }),
+    });
+    expect((await call("POST", "/api/grade", { fen: START, uci: "e2e4", nextGraded: true })).status).toBe(200);
+    expect((await call("POST", "/api/grade", { fen: afterE4, uci: "e7e5" })).status).toBe(200);
+    expect(searched.filter((fen) => fen === afterE4)).toHaveLength(1);
+  });
+
+  it("rejects a nextGraded that isn't true or false", async () => {
+    const call = await start();
+    expect(await call("POST", "/api/grade", { fen: START, uci: "e2e4", nextGraded: "yes" })).toEqual({
+      status: 400,
+      body: { error: "nextGraded: Expected boolean, received string" },
+    });
+  });
+
+  it("needs a session", async () => {
+    const { call } = await startServer({}, { signedIn: false });
+    expect((await call("POST", "/api/grade", { fen: START, uci: "e2e4", nextGraded: true })).status).toBe(401);
+  });
+
   it("explains how to fix an unreachable engine and reports it in the status", async () => {
     const call = await start({ analyzer: fakeAnalyzer({ analyze: unreachable }) });
     const { status, body } = await call("POST", "/api/grade", { fen: START, uci: "e2e4" });
