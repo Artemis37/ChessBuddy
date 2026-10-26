@@ -9,9 +9,12 @@ import {
   type BotRating,
   type MoveGrade,
   type PositionEval,
+  type SessionResponse,
   type StatusResponse,
 } from "../shared/types";
 import { CachedAnalyzer } from "./analysis/cache";
+import { AuthError, type Auth } from "./auth/auth";
+import { SESSION_COOKIE, SESSION_TTL_MS } from "./auth/session";
 import { gradeMove, type Analyzer } from "./analysis/grade";
 import { opponent, toMoveInput } from "./analysis/motifs";
 import { evaluatePosition } from "./analysis/position";
@@ -28,6 +31,8 @@ export interface AppDeps {
   /** A separate connection for bot moves, so the bot never waits behind grading. */
   bot: EngineConnection & { move(fen: string, rating: BotRating): Promise<string | null> };
   coach: Pick<Coach, "configured" | "defaultModel" | "explain" | "ask">;
+  /** Sign-in. Every /api route except the /api/auth ones needs a signed-in session. */
+  auth: Pick<Auth, "signIn" | "sessionUser">;
   analysisDepth: number;
   /** Built client to serve, if it exists. */
   distDir?: string;
@@ -81,7 +86,7 @@ function parse<S extends z.ZodTypeAny>(schema: S, body: unknown): z.output<S> {
   return result.data;
 }
 
-export function createApp({ analyzer: engine, bot, coach, analysisDepth, distDir }: AppDeps) {
+export function createApp({ analyzer: engine, bot, coach, auth, analysisDepth, distDir }: AppDeps) {
   // The evaluation bar and grading often ask about the same position, so analyses are cached.
   const analyzer = new CachedAnalyzer(engine);
   const coachModels = [...new Set<string>([coach.defaultModel, ...COACH_MODELS.map((m) => m.id)])];
@@ -101,7 +106,41 @@ export function createApp({ analyzer: engine, bot, coach, analysisDepth, distDir
   }
 
   const app = express();
+  // Azure Container Apps puts one proxy in front of the app: trust it for the client's IP
+  // (used to limit sign-in attempts) and for HTTPS (so the session cookie is marked Secure).
+  app.set("trust proxy", 1);
   app.use(express.json({ limit: "200kb" }));
+
+  const cookieOptions = (secure: boolean) => ({ httpOnly: true, sameSite: "lax" as const, secure, path: "/" });
+
+  app.post("/api/auth/login", async (req, res) => {
+    const body = parse(
+      z.object({
+        username: z.string().trim().min(1, "Enter your username").max(64),
+        password: z.string().min(1, "Enter your password").max(200),
+      }),
+      req.body,
+    );
+    const session = await auth.signIn(body.username, body.password, req.ip ?? "unknown");
+    res.cookie(SESSION_COOKIE, session.token, { ...cookieOptions(req.secure), maxAge: SESSION_TTL_MS });
+    res.json({ username: session.username } satisfies SessionResponse);
+  });
+
+  app.post("/api/auth/logout", (req, res) => {
+    res.clearCookie(SESSION_COOKIE, cookieOptions(req.secure));
+    res.json({ ok: true });
+  });
+
+  app.get("/api/auth/me", (req, res) => {
+    const username = auth.sessionUser(req.headers.cookie);
+    if (!username) throw new AuthError(401, "Sign in first");
+    res.json({ username } satisfies SessionResponse);
+  });
+
+  app.use("/api", (req, _res, next) => {
+    if (!auth.sessionUser(req.headers.cookie)) throw new AuthError(401, "Sign in first");
+    next();
+  });
 
   app.get("/api/status", (_req, res) => {
     const status: StatusResponse = {
@@ -213,11 +252,13 @@ export function createApp({ analyzer: engine, bot, coach, analysisDepth, distDir
     const status =
       err instanceof BadRequest
         ? 400
-        : err instanceof CoachError
-          ? 503
-          : typeof given === "number" && given >= 400 && given < 500
-            ? given
-            : 500;
+        : err instanceof AuthError
+          ? err.status
+          : err instanceof CoachError
+            ? 503
+            : typeof given === "number" && given >= 400 && given < 500
+              ? given
+              : 500;
     if (status === 500) console.error(err);
     res.status(status).json({ error: status === 400 && err instanceof SyntaxError ? "Invalid JSON body" : message });
   });
@@ -231,6 +272,9 @@ function engineHelp(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
   if (/ENOENT|connection closed|docker/i.test(message)) {
     return `Can't reach the Stockfish engine (${message}). Make sure Docker Desktop is running and the image is built with "npm run engine:build".`;
+  }
+  if (/fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN/i.test(message)) {
+    return `Can't reach the Stockfish engine at ENGINE_URL (${message}). Check that the engine container is running and the URL is right.`;
   }
   return message;
 }

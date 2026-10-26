@@ -1,5 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { EngineLine } from "../../shared/types";
 import type { Analyzer } from "../analysis/grade";
 import { parseBestMove, parseLines } from "./uci";
@@ -11,7 +12,13 @@ interface ToolPayload {
 }
 
 /**
- * Talks to Stockfish through the mcp-stockfish MCP server running in Docker.
+ * Where mcp-stockfish runs: a local Docker image started with `docker run -i` (stdio), or the
+ * engine container's HTTP gateway (docker/gateway), for example another Azure container app.
+ */
+export type EngineTarget = { image: string } | { url: string; token?: string };
+
+/**
+ * Talks to Stockfish through the mcp-stockfish MCP server.
  *
  * The server starts a fresh Stockfish process for every tool call and only stops reading
  * output at `bestmove`, so each call sends all of its UCI commands at once, newline
@@ -22,7 +29,7 @@ export class McpStockfishEngine implements Analyzer {
   private connecting: Promise<Client> | null = null;
 
   constructor(
-    private readonly image: string,
+    private readonly target: EngineTarget,
     private readonly threads = 2,
   ) {}
 
@@ -84,11 +91,17 @@ export class McpStockfishEngine implements Analyzer {
   }
 
   private async open(): Promise<Client> {
-    const transport = new StdioClientTransport({
-      command: "docker",
-      args: ["run", "-i", "--rm", this.image],
-      stderr: "ignore",
-    });
+    const target = this.target;
+    const transport =
+      "url" in target
+        ? new StreamableHTTPClientTransport(new URL(target.url), {
+            requestInit: target.token ? { headers: { Authorization: `Bearer ${target.token}` } } : undefined,
+          })
+        : new StdioClientTransport({
+            command: "docker",
+            args: ["run", "-i", "--rm", target.image],
+            stderr: "ignore",
+          });
     const client = new Client({ name: "chessbuddy", version: "0.1.0" });
     client.onclose = () => {
       if (this.client === client) this.client = null;

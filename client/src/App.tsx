@@ -111,7 +111,7 @@ function loadModel(): string {
   }
 }
 
-export function App() {
+export function App({ user, onSignOut }: { user: string; onSignOut: () => void }) {
   const [draft, setDraft] = useState<Settings>({ mode: "bot", myColor: "w", rating: 1000 });
   const [settings, setSettings] = useState<Settings>(draft);
   const [moves, setMoves] = useState<PlayedMove[]>([]);
@@ -155,16 +155,22 @@ export function App() {
 
   useEffect(() => {
     let alive = true;
-    const load = () =>
+    // Only while the tab is visible: a request every 15 seconds keeps a scale-to-zero host
+    // (Azure Container Apps) running, so a forgotten background tab would use up its free hours.
+    const load = () => {
+      if (document.hidden) return;
       api.status().then(
         (s) => alive && setStatus(s),
         () => alive && setStatus(null),
       );
+    };
     load();
     const timer = setInterval(load, 15_000);
+    document.addEventListener("visibilitychange", load);
     return () => {
       alive = false;
       clearInterval(timer);
+      document.removeEventListener("visibilitychange", load);
     };
   }, []);
 
@@ -632,7 +638,13 @@ export function App() {
         <h1>
           <img src="/pieces/staunty/wN.svg" alt="" aria-hidden /> ChessBuddy
         </h1>
-        <StatusPills status={status} />
+        <div className="topbar-right">
+          <StatusPills status={status} />
+          <div className="account">
+            <span title="Signed in">{user}</span>
+            <button onClick={onSignOut}>Sign out</button>
+          </div>
+        </div>
       </header>
 
       <main className="layout">

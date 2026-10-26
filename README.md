@@ -12,17 +12,20 @@ A local chess learning app. Play Stockfish or play both sides yourself; the engi
 - **Explain this move**: Claude explains the move, yours or your opponent's, in one sentence and two to four short steps that play out on the board: the move and what it neglects or threatens, the reply that punishes it (or how to answer it), and the better move. Each step slides its moves into place, then draws arrows for attacks and outlines squares such as a hanging piece, and the evaluation bar follows along. Click a step, use ◀ ⟲ ▶ or the arrow keys to move between steps, and press Esc to go back to the game. Pick the model next to the button: Sonnet 5.5 (default), Opus 5.5 (most thorough) or Haiku 5.5 (fastest and cheapest).
 - **Ask about it**: type a follow-up question under the explanation ("Why not 3... Qf6?", "What if White takes on f7 anyway?"). The answer is a sentence or two plus steps that play the moves it talks about, including moves the engine didn't suggest: Claude has Stockfish play them and continue with best play. Questions build on the earlier ones; **Explain again** starts a fresh thread. As on claude.ai, **✎ Edit** changes an earlier question and **↻ Retry** asks it again for another answer. Each makes a new version of that question, and the coach sees only the questions before it. The old version keeps the questions that followed it, and **‹ 1 / 2 ›** switches between versions.
 - **Retry this move** takes the move back so you can find a better one.
+- **Sign-in**: ChessBuddy is a private system. There's no sign-up: you sign in with the built-in account, and a session lasts 7 days or until you press **Sign out**.
 
 ## How it works
 
 ```
 React (Vite) ──/api──► Node + Express ──MCP over stdio──► mcp-stockfish (Docker) ──► Stockfish 17
-                              │
-                              └──► Claude API (move explanations)
+                         │    │          (or MCP over HTTP, ENGINE_URL, to the engine container's gateway)
+                         │    └──► Claude API (move explanations)
+                         └──► Azure SQL (accounts, only when someone signs in)
 ```
 
-- `server/engine/mcpEngine.ts`: MCP client for [sonirico/mcp-stockfish](https://github.com/sonirico/mcp-stockfish), started with `docker run -i`. The server starts a fresh Stockfish for every tool call, so each call sends all its UCI commands at once (`setoption …`, `position …`, `go …`).
-- Two engine connections (two containers) run side by side: one grades your moves, the other plays the bot's moves. mcp-stockfish answers one request at a time, so with a single connection the bot's reply would wait behind the grade.
+- `server/engine/mcpEngine.ts`: MCP client for [sonirico/mcp-stockfish](https://github.com/sonirico/mcp-stockfish). Locally it's started with `docker run -i`; when `ENGINE_URL` is set, the client talks MCP over HTTP to the engine container instead (`docker/gateway/server.mjs`, see [Deploy](#deploy)). The server starts a fresh Stockfish for every tool call, so each call sends all its UCI commands at once (`setoption …`, `position …`, `go …`).
+- Two engine connections run side by side: one grades your moves, the other plays the bot's moves. mcp-stockfish answers one request at a time, so with a single connection the bot's reply would wait behind the grade. Locally each connection is its own container; the HTTP engine container runs a pool of `ENGINE_POOL_SIZE` (default 2) mcp-stockfish processes and hands each request to a free one.
+- `server/auth/`: sign-in. Passwords are stored as scrypt hashes. Accounts live in Azure SQL (`chessbuddy.Users`, created with the built-in account on the first sign-in) when `SQL_CONNECTION_STRING` is set, otherwise only the built-in account exists, in memory. Sessions are HMAC-signed, HttpOnly cookies, so checking one never touches the database and a free-tier database can stay paused while you play. Five failed sign-ins from one address block it for 15 minutes. Every `/api` route except `/api/auth/*` needs a session.
 - `server/analysis/`: grading. Winning chances use the Lichess formula; the grade comes from how much your winning chances dropped compared with the engine's best move (under 2 points is Excellent, under 5 Good, under 10 Inaccuracy, under 20 Mistake, 20 or more Blunder). The facts list (hanging pieces, material swings, mates) is computed with chess.js.
 - `server/coach.ts`: one Claude call per Explain click with structured JSON output, using the model picked in the app. Claude never writes the moves the board plays: for each step it only picks one of the engine's lines (the move played followed by the best reply, or one of the engine's top three moves) and which of its moves to show. `server/analysis/walkthrough.ts` turns that into real moves and keeps only the arrows chess.js confirms in that position, so the board shows lines the engine actually found. To show a move that isn't in those lines, Claude calls a `try_moves` tool: the server plays the moves (rejecting illegal ones) and asks Stockfish for the best continuation, which becomes a new line the steps can use. When a caption names a move that comes shortly after the step's last move in its line, the step plays up to it, so moves mentioned in the text are also shown. Follow-up questions (`/api/ask`) go through the same tool loop, with the explanation and earlier questions replayed as context.
 - `client/src/board/`: the board, evaluation bar and player bars. Legal moves come from chess.js in the browser, so the dots appear instantly without asking the engine. The evaluation bar reuses grades where it can and otherwise asks `/api/eval`; the server caches analyses so the bar and grading don't search the same position twice.
@@ -60,7 +63,7 @@ Copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY`. Grading and the bot w
 npm run dev
 ```
 
-Open http://localhost:5173. The API runs on port 3001.
+Open http://localhost:5173 and sign in with the built-in account (username `kviiilyn37_`; only its password's hash is in `server/auth/users.ts`). The API runs on port 3001.
 
 To run a production build on a single port instead:
 
@@ -79,9 +82,31 @@ Then open http://localhost:3001.
 | `COACH_MODEL` | `claude-sonnet-5-5` | Default model for explanations (you can switch in the app) |
 | `COACH_EFFORT` | `medium` | `low`, `medium` or `high`: more effort means deeper but slower explanations |
 | `ANALYSIS_DEPTH` | `16` | Stockfish search depth used for grading |
-| `STOCKFISH_IMAGE` | `chessbuddy/mcp-stockfish` | Docker image of the engine server |
+| `STOCKFISH_IMAGE` | `chessbuddy/mcp-stockfish` | Docker image of the engine server (when `ENGINE_URL` isn't set) |
+| `ENGINE_URL` | none | MCP endpoint of the HTTP engine container, for example `http://localhost:8080/mcp`. When set, the server doesn't start Docker containers |
+| `ENGINE_TOKEN` | none | Sent as `Authorization: Bearer …` to `ENGINE_URL`; must match the engine container's `ENGINE_TOKEN` |
+| `SESSION_SECRET` | random at startup | Signs session cookies. Set it in production, or every restart signs you out |
+| `SQL_CONNECTION_STRING` | none | Azure SQL connection string for accounts. Without it, only the built-in account exists |
 | `API_PORT` | `3001` | API server port |
 | `CALIBRATE_WORKERS` | `12` | Engine containers `npm run calibrate` runs at once |
+
+The HTTP engine container (`npm run engine:build:http`) reads `PORT` (default `8080`), `ENGINE_POOL_SIZE` (default `2`, mcp-stockfish processes per container) and `ENGINE_TOKEN` (optional; when set, requests need it).
+
+## Deploy
+
+[docs/deploy-aca.html](docs/deploy-aca.html) walks through deploying to Azure Container Apps on the free monthly grant: two images (`Dockerfile` for the web app, the `http` target of `docker/mcp-stockfish.Dockerfile` for the engine), the engine reachable only from inside the environment, and accounts in an Azure SQL free-tier database.
+
+GitHub Actions (`.github/workflows/ci.yml`) typechecks and tests every push and pull request, then builds both images. Pushes to `master` publish them to Docker Hub as `<user>/chessbuddy-web` and `<user>/chessbuddy-engine`, tagged `sha-<commit>` and `latest` (a `v1.2.0` git tag also publishes `1.2.0`); pull requests only build them. It needs a `DOCKERHUB_USERNAME` variable and a `DOCKERHUB_TOKEN` secret (a Read & Write Docker Hub token) in the repo's **Settings → Secrets and variables → Actions**. Container Apps doesn't pick up new images by itself: point each app at the new `sha-…` tag (step 9 of the guide).
+
+To try the two containers together locally:
+
+```bash
+npm run engine:build:http
+```
+
+```bash
+npm run web:build
+```
 
 ## Tests
 

@@ -31,7 +31,7 @@ const BALANCED_CP = 300;
 
 // One search thread keeps Stockfish deterministic, so with the seeded random numbers below
 // every run measures the same positions and differences come from the strength table alone.
-const engines = Array.from({ length: WORKERS }, () => new McpStockfishEngine(IMAGE, 1));
+const engines = Array.from({ length: WORKERS }, () => new McpStockfishEngine({ image: IMAGE }, 1));
 
 /** Small seeded PRNG (mulberry32). */
 function seeded(seed: number): () => number {

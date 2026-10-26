@@ -1,0 +1,13 @@
+# Keep secrets and local build output out of the web image.
+.env
+.env.*
+!.env.example
+node_modules
+dist
+.git
+.github
+.claude
+.workflow-provip
+docs
+docker
+*.log

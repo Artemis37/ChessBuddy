@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deploy ChessBuddy</title>
+<meta name="description" content="Step-by-step guide to deploying ChessBuddy's web app and Stockfish engine to Azure Container Apps on the free monthly grant, with accounts in Azure SQL.">
+<style>
+  :root {
+    --bg: #f7f6f3;
+    --surface: #ffffff;
+    --surface-2: #f0eee9;
+    --text: #1d1c1a;
+    --text-body: #3b3a37;
+    --muted: #6d6b66;
+    --border: #e1ded7;
+    --accent: #4f7d2c;
+    --accent-soft: #e8f0df;
+    --warn: #8a5a00;
+    --warn-soft: #fbf0d9;
+    --danger: #a12d22;
+    --danger-soft: #fbe5e2;
+    --code-bg: #1f1e1c;
+    --code-text: #ecebe8;
+    --var: #c25e00;
+    --var-code: #ffb86b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #1e1d1b;
+      --surface: #262522;
+      --surface-2: #302e2b;
+      --text: #ffffff;
+      --text-body: #d4d3d0;
+      --muted: #9a9894;
+      --border: #3c3a37;
+      --accent: #81b64c;
+      --accent-soft: #2c3524;
+      --warn: #f2c35b;
+      --warn-soft: #3a3121;
+      --danger: #fa8a7d;
+      --danger-soft: #3d2522;
+      --code-bg: #141413;
+      --code-text: #ecebe8;
+      --var: #ffb86b;
+      --var-code: #ffb86b;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #1e1d1b;
+    --surface: #262522;
+    --surface-2: #302e2b;
+    --text: #ffffff;
+    --text-body: #d4d3d0;
+    --muted: #9a9894;
+    --border: #3c3a37;
+    --accent: #81b64c;
+    --accent-soft: #2c3524;
+    --warn: #f2c35b;
+    --warn-soft: #3a3121;
+    --danger: #fa8a7d;
+    --danger-soft: #3d2522;
+    --code-bg: #141413;
+    --code-text: #ecebe8;
+    --var: #ffb86b;
+    --var-code: #ffb86b;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 16px; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text-body);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3, strong { color: var(--text); }
+  h1 { font-size: 30px; line-height: 1.2; margin: 0 0 8px; }
+  h2 { font-size: 22px; margin: 0 0 12px; display: flex; align-items: center; gap: 10px; }
+  h3 { font-size: 17px; margin: 22px 0 8px; }
+  a { color: var(--accent); }
+  p { margin: 0 0 12px; }
+  ul, ol { margin: 0 0 12px; padding-left: 22px; }
+  li { margin: 4px 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; font-size: 0.88em; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+  var { font-style: normal; color: var(--var); font-weight: 600; }
+
+  .page { max-width: 1180px; margin: 0 auto; padding: 32px 16px 64px; display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 40px; }
+  @media (max-width: 900px) { .page { grid-template-columns: minmax(0, 1fr); gap: 16px; } }
+
+  nav.toc { position: sticky; top: 24px; align-self: start; font-size: 14px; }
+  nav.toc strong { display: block; margin-bottom: 8px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+  nav.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc; }
+  nav.toc li { margin: 0; }
+  nav.toc a { display: block; padding: 5px 10px; border-radius: 6px; color: var(--text-body); text-decoration: none; }
+  nav.toc a:hover { background: var(--surface-2); color: var(--text); }
+  @media (max-width: 900px) {
+    nav.toc { position: static; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+    nav.toc ol { columns: 2; column-gap: 12px; }
+  }
+  @media (max-width: 520px) { nav.toc ol { columns: 1; } }
+
+  header.intro { margin-bottom: 28px; }
+  header.intro .lede { font-size: 18px; color: var(--muted); max-width: 70ch; }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .chip { font-size: 13px; padding: 3px 10px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); }
+
+  section.step { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 22px 24px; margin-bottom: 20px; }
+  @media (max-width: 520px) { section.step { padding: 18px 16px; } }
+  .num { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 15px; flex: none; }
+  .ui { font-weight: 600; color: var(--text); }
+
+  pre { position: relative; background: var(--code-bg); color: var(--code-text); border-radius: 8px; padding: 14px 16px; margin: 8px 0 14px; overflow-x: auto; font-size: 14px; line-height: 1.5; }
+  pre code { background: none; padding: 0; color: inherit; font-size: inherit; overflow-wrap: normal; }
+  pre var { color: var(--var-code); }
+  .copy { position: absolute; top: 8px; right: 8px; font: 600 12px/1 inherit; padding: 6px 9px; border-radius: 6px; border: 1px solid #45423e; background: #2b2a27; color: #ecebe8; cursor: pointer; opacity: 0.85; }
+  .copy:hover { opacity: 1; }
+
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 14px; font-size: 14.5px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--text); background: var(--surface-2); font-weight: 600; }
+  .table-wrap { overflow-x: auto; }
+
+  .callout { border-radius: 8px; padding: 12px 14px; margin: 10px 0 14px; border-left: 4px solid var(--accent); background: var(--accent-soft); }
+  .callout.warn { border-color: var(--warn); background: var(--warn-soft); }
+  .callout.danger { border-color: var(--danger); background: var(--danger-soft); }
+  .callout p:last-child, .callout ul:last-child { margin-bottom: 0; }
+
+  .diagram { margin: 6px 0 4px; overflow-x: auto; }
+  .diagram svg { display: block; min-width: 640px; width: 100%; height: auto; }
+  .diagram .box { fill: var(--surface-2); stroke: var(--border); }
+  .diagram .box.web { stroke: var(--accent); }
+  .diagram .env { fill: none; stroke: var(--accent); stroke-dasharray: 6 5; }
+  .diagram text { fill: var(--text-body); font: 13px -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .diagram .title { fill: var(--text); font-weight: 700; font-size: 14px; }
+  .diagram .small { fill: var(--muted); font-size: 12px; }
+  .diagram .line { stroke: var(--muted); stroke-width: 1.6; fill: none; marker-end: url(#arrow); }
+  .diagram #arrow path { fill: var(--muted); }
+
+  ol.steps > li { margin: 8px 0; }
+  .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  @media (max-width: 700px) { .grid2 { grid-template-columns: minmax(0, 1fr); } }
+  .mini { background: var(--surface-2); border-radius: 8px; padding: 12px 14px; }
+  .mini h3 { margin-top: 0; }
+  footer { color: var(--muted); font-size: 14px; margin-top: 24px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav class="toc" aria-label="Contents">
+    <strong>Contents</strong>
+    <ol>
+      <li><a href="#overview">Overview</a></li>
+      <li><a href="#before">Before you start</a></li>
+      <li><a href="#values">1. Prepare secrets</a></li>
+      <li><a href="#sql">2. Open Azure SQL to Azure</a></li>
+      <li><a href="#images">3. Publish images to Docker Hub</a></li>
+      <li><a href="#engine">4. Engine app</a></li>
+      <li><a href="#web">5. Web app</a></li>
+      <li><a href="#secrets">6. Secrets</a></li>
+      <li><a href="#test">7. Sign in and test</a></li>
+      <li><a href="#budget">8. Budget alert</a></li>
+      <li><a href="#update">9. Deploy updates</a></li>
+      <li><a href="#password">10. Change the password</a></li>
+      <li><a href="#costs">Costs and limits</a></li>
+      <li><a href="#trouble">Troubleshooting</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <header class="intro">
+      <h1>Deploy ChessBuddy to Azure Container Apps</h1>
+      <p class="lede">Two container apps on the free Consumption plan: a public web app and a private Stockfish engine that can run at least two engines at once. Accounts live in your Azure SQL free-tier database.</p>
+      <div class="meta">
+        <span class="chip">Azure portal</span>
+        <span class="chip">Docker Hub via GitHub Actions</span>
+        <span class="chip">About 45 minutes the first time</span>
+      </div>
+    </header>
+
+    <section class="step" id="overview">
+      <h2>Overview</h2>
+      <div class="diagram" role="img" aria-label="The browser reaches chessbuddy-web over HTTPS. Inside the Container Apps environment, chessbuddy-web calls chessbuddy-engine over internal ingress. chessbuddy-web also calls Azure SQL on sign-in and the Claude API for explanations.">
+        <svg viewBox="0 0 760 270" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z"/></marker>
+          </defs>
+          <rect class="box" x="10" y="95" width="110" height="60" rx="8"/>
+          <text class="title" x="65" y="122" text-anchor="middle">Browser</text>
+          <text class="small" x="65" y="141" text-anchor="middle">you</text>
+
+          <rect class="env" x="165" y="20" width="400" height="215" rx="12"/>
+          <text class="small" x="180" y="42">Container Apps environment: chessbuddy-env (Consumption)</text>
+
+          <rect class="box web" x="185" y="85" width="160" height="80" rx="8"/>
+          <text class="title" x="265" y="112" text-anchor="middle">chessbuddy-web</text>
+          <text x="265" y="132" text-anchor="middle">external ingress :3001</text>
+          <text class="small" x="265" y="150" text-anchor="middle">0–1 replica</text>
+
+          <rect class="box" x="390" y="70" width="160" height="110" rx="8"/>
+          <text class="title" x="470" y="97" text-anchor="middle">chessbuddy-engine</text>
+          <text x="470" y="117" text-anchor="middle">internal ingress :8080</text>
+          <text class="small" x="470" y="137" text-anchor="middle">2 Stockfish engines</text>
+          <text class="small" x="470" y="154" text-anchor="middle">per replica, 0–2 replicas</text>
+
+          <rect class="box" x="610" y="45" width="140" height="55" rx="8"/>
+          <text class="title" x="680" y="70" text-anchor="middle">Azure SQL</text>
+          <text class="small" x="680" y="88" text-anchor="middle">free tier, accounts</text>
+
+          <rect class="box" x="610" y="165" width="140" height="55" rx="8"/>
+          <text class="title" x="680" y="190" text-anchor="middle">Claude API</text>
+          <text class="small" x="680" y="208" text-anchor="middle">Explain, Ask</text>
+
+          <path class="line" d="M120 125 H183"/>
+          <text class="small" x="128" y="116">HTTPS</text>
+          <path class="line" d="M345 125 H388"/>
+          <text class="small" x="349" y="116">MCP</text>
+          <path class="line" d="M300 85 C 330 30, 560 30, 608 66"/>
+          <text class="small" x="430" y="58">sign-in only</text>
+          <path class="line" d="M300 165 C 330 235, 560 235, 608 196"/>
+        </svg>
+      </div>
+      <ul>
+        <li><strong>chessbuddy-web</strong> is the <code>Dockerfile</code> in the repo root: Express API, the built React app and sign-in.</li>
+        <li><strong>chessbuddy-engine</strong> is the <code>http</code> target of <code>docker/mcp-stockfish.Dockerfile</code>: the same mcp-stockfish engine you run locally, behind a small MCP-over-HTTP gateway. Each replica runs <code>ENGINE_POOL_SIZE</code> (2) engines, so a grade and the bot's move run at the same time; a third request at once starts a second replica.</li>
+        <li>The engine's ingress is <em>limited to the environment</em>, so the internet can't reach it. A shared token protects it as well.</li>
+        <li>The web app only touches the database when someone signs in. Sessions are signed cookies, so the free-tier database can pause while you play.</li>
+      </ul>
+    </section>
+
+    <section class="step" id="before">
+      <h2>Before you start</h2>
+      <ul>
+        <li>An Azure subscription with billing set up (pay-as-you-go). The Container Apps free grant applies automatically.</li>
+        <li>Your Azure SQL free-offer database: server name, database name, and a SQL user and password.</li>
+        <li>A Docker Hub account (the free Personal plan is enough) and this repo on GitHub.</li>
+        <li>Node.js and this repo with <code>npm install</code> done, for the secrets and the password hash. Docker Desktop is only needed to build images by hand.</li>
+        <li>An Anthropic API key for Explain (grading and the bot work without one).</li>
+      </ul>
+      <p>In the commands below, replace <var>&lt;docker-user&gt;</var> (your Docker Hub username) and the other <var>orange</var> values with yours.</p>
+    </section>
+
+    <section class="step" id="values">
+      <h2><span class="num">1</span> Prepare secrets</h2>
+      <p>Generate two random values: one for <code>SESSION_SECRET</code> (signs session cookies) and one for <code>ENGINE_TOKEN</code> (shared by the web app and the engine). Run this twice and keep both outputs:</p>
+      <pre><code>node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"</code></pre>
+      <p>Get the database connection string: in the portal open your <span class="ui">SQL database → Settings → Connection strings → ADO.NET (SQL authentication)</span>, copy it and put your password in place of <code>{your_password}</code>. It looks like:</p>
+      <pre><code>Server=tcp:<var>&lt;server&gt;</var>.database.windows.net,1433;Initial Catalog=<var>&lt;database&gt;</var>;User ID=<var>&lt;user&gt;</var>;Password=<var>&lt;password&gt;</var>;Encrypt=True;</code></pre>
+      <div class="callout warn"><p>These four values (session secret, engine token, connection string, Anthropic key) only go into Container Apps secrets in step 6. Don't put them in an image or commit them.</p></div>
+    </section>
+
+    <section class="step" id="sql">
+      <h2><span class="num">2</span> Open Azure SQL to Azure services</h2>
+      <ol class="steps">
+        <li>Open the <strong>SQL server</strong> (not the database) and go to <span class="ui">Security → Networking</span>.</li>
+        <li>Set <span class="ui">Public network access</span> to <span class="ui">Selected networks</span>.</li>
+        <li>Under <span class="ui">Exceptions</span>, tick <span class="ui">Allow Azure services and resources to access this server</span>, then <span class="ui">Save</span>.</li>
+      </ol>
+      <p>Container Apps on the Consumption plan have no fixed outbound IP, so this exception is how the web app gets through. It admits any Azure address, so keep a strong SQL password.</p>
+      <p>To also sign in from <code>npm run dev</code> against this database, add your own IP under <span class="ui">Firewall rules</span> and put the connection string in your local <code>.env</code> as <code>SQL_CONNECTION_STRING</code>.</p>
+      <div class="callout"><p>No table to create by hand: on the first sign-in the app creates <code>chessbuddy.Users</code> and adds the built-in account <code>kviiilyn37_</code> if the table is empty.</p></div>
+    </section>
+
+    <section class="step" id="images">
+      <h2><span class="num">3</span> Publish the images to Docker Hub</h2>
+      <p>The workflow in <code>.github/workflows/ci.yml</code> does this on every push to <code>master</code>: it typechecks, runs the tests, builds both images for <code>linux/amd64</code> and pushes them to <code><var>&lt;docker-user&gt;</var>/chessbuddy-web</code> and <code><var>&lt;docker-user&gt;</var>/chessbuddy-engine</code>. It only needs a Docker Hub token.</p>
+      <ol class="steps">
+        <li>In Docker Hub, open <span class="ui">your avatar → Account settings → Personal access tokens → Generate new token</span>. Description <code>github-actions</code>, <span class="ui">Access permissions</span>: <strong>Read &amp; Write</strong>. Copy the token; it's shown only once.</li>
+        <li>Generate a second token the same way with <span class="ui">Public Repo Read-only</span>, description <code>container-apps</code>, and keep it for steps 4 and 5.</li>
+        <li>On GitHub, open the repo's <span class="ui">Settings → Secrets and variables → Actions</span>.
+          <ul>
+            <li><span class="ui">Variables</span> tab → <span class="ui">New repository variable</span>: name <code>DOCKERHUB_USERNAME</code>, value your Docker Hub username.</li>
+            <li><span class="ui">Secrets</span> tab → <span class="ui">New repository secret</span>: name <code>DOCKERHUB_TOKEN</code>, value the Read &amp; Write token.</li>
+          </ul>
+        </li>
+        <li>Push to <code>master</code>, or open <span class="ui">Actions → CI → Run workflow</span>. When the run is green, its summary lists the pushed tags.</li>
+      </ol>
+      <div class="table-wrap"><table>
+        <tr><th>Tag</th><th>When</th></tr>
+        <tr><td><code>sha-<var>&lt;commit&gt;</var></code></td><td>Every push: the first 7 characters of the commit, for example <code>sha-1e322e2</code>. Both images of a commit get the same tag. <strong>Use these in Container Apps.</strong></td></tr>
+        <tr><td><code>latest</code></td><td>Every push to <code>master</code></td></tr>
+        <tr><td><code>1.2.0</code></td><td>When you push a git tag such as <code>v1.2.0</code></td></tr>
+      </table></div>
+      <p>Docker Hub creates both repositories on the first push, public unless you changed <span class="ui">Default privacy</span> in your Docker Hub settings. The images hold no secrets (<code>.dockerignore</code> keeps <code>.env</code> out), and the code is on GitHub anyway. Pull requests build the images without pushing them.</p>
+      <div class="callout"><p><strong>Why a sha tag and not <code>latest</code>:</strong> a replica that starts from zero may pull its tag again, so with <code>latest</code> a cold start could switch to a newer image without a new revision, and the web app and engine could end up on different versions. A <code>sha-…</code> tag never changes.</p></div>
+      <p>To push by hand instead (for example before the repo is on GitHub), run <code>docker login -u <var>&lt;docker-user&gt;</var></code> with the Read &amp; Write token as the password, then:</p>
+      <pre><code>docker build --target http -t <var>&lt;docker-user&gt;</var>/chessbuddy-engine:manual-1 -f docker/mcp-stockfish.Dockerfile docker
+docker build -t <var>&lt;docker-user&gt;</var>/chessbuddy-web:manual-1 .
+docker push <var>&lt;docker-user&gt;</var>/chessbuddy-engine:manual-1
+docker push <var>&lt;docker-user&gt;</var>/chessbuddy-web:manual-1</code></pre>
+      <p>Docker Desktop on Windows builds <code>linux/amd64</code>, which Container Apps needs. On an Apple Silicon Mac, add <code>--platform linux/amd64</code> to both builds.</p>
+    </section>
+
+    <section class="step" id="engine">
+      <h2><span class="num">4</span> Create the environment and the engine app</h2>
+      <ol class="steps">
+        <li>Search the portal for <span class="ui">Container Apps</span>, then <span class="ui">Create → Container App</span>.</li>
+        <li><strong>Basics</strong>
+          <ul>
+            <li><span class="ui">Resource group</span>: Create new → <code>chessbuddy-rg</code></li>
+            <li><span class="ui">Container app name</span>: <code>chessbuddy-engine</code></li>
+            <li><span class="ui">Deployment source</span>: Container image</li>
+            <li><span class="ui">Region</span>: the same region as your Azure SQL database</li>
+            <li><span class="ui">Container Apps environment</span>: Create new → <code>chessbuddy-env</code>. Choose <span class="ui">Consumption only</span> if offered; with <span class="ui">Workload profiles</span>, use only the Consumption profile (Dedicated profiles cost money). Zone redundancy: Disabled. <span class="ui">Monitoring → Logs destination</span>: <span class="ui">Don't save logs</span> (Log Analytics bills per GB; the live log stream still works). <span class="ui">Networking</span>: no virtual network.</li>
+          </ul>
+        </li>
+        <li><strong>Container</strong>
+          <ul>
+            <li>Untick <span class="ui">Use quickstart image</span>.</li>
+            <li><span class="ui">Image source</span>: Docker Hub or other registries · <span class="ui">Image type</span>: <strong>Private</strong>, even though the repository is public. Docker Hub limits pulls without signing in per IP address, and Container Apps shares its addresses with other Azure customers, so anonymous pulls can fail.</li>
+            <li><span class="ui">Registry login server</span>: <code>docker.io</code> · user name: <var>&lt;docker-user&gt;</var> · password: the <code>container-apps</code> read-only token from step 3</li>
+            <li><span class="ui">Image and tag</span>: <code><var>&lt;docker-user&gt;</var>/chessbuddy-engine:sha-<var>&lt;commit&gt;</var></code>, with the tag from the CI run summary</li>
+            <li><span class="ui">CPU and Memory</span>: 1 CPU core, 2 Gi</li>
+          </ul>
+        </li>
+        <li><strong>Ingress</strong>: Enabled · <span class="ui">Ingress traffic</span>: <strong>Limited to Container Apps Environment</strong> · Ingress type: HTTP · <span class="ui">Target port</span>: <code>8080</code></li>
+        <li><span class="ui">Review + create</span> → <span class="ui">Create</span>, then <span class="ui">Go to resource</span>.</li>
+        <li><span class="ui">Application → Scale</span>: <span class="ui">Min replicas</span> 0, <span class="ui">Max replicas</span> 2. Add a scale rule: name <code>http-concurrency</code>, type <span class="ui">HTTP scaling</span>, <span class="ui">Concurrent requests</span> <code>2</code>. Save.</li>
+        <li>On <span class="ui">Overview</span>, copy the <span class="ui">Application Url</span>. It contains <code>.internal.</code>; opening it in your browser gives a 404, which shows it's private.</li>
+      </ol>
+      <div class="callout">
+        <p><strong>At least two engines:</strong> one replica already runs two engines side by side (<code>ENGINE_POOL_SIZE=2</code>, set in the image). With the scale rule, a third simultaneous request starts a second replica, so up to four engines run at once. For more engines per replica, add the environment variable <code>ENGINE_POOL_SIZE</code> (and give it more CPU); for more replicas, raise <span class="ui">Max replicas</span>. The gateway is stateless, so any replica can answer any request.</p>
+      </div>
+    </section>
+
+    <section class="step" id="web">
+      <h2><span class="num">5</span> Create the web app</h2>
+      <ol class="steps">
+        <li><span class="ui">Create → Container App</span> again. Basics: resource group <code>chessbuddy-rg</code>, name <code>chessbuddy-web</code>, same region, environment <code>chessbuddy-env</code>.</li>
+        <li><strong>Container</strong>: the same registry settings as the engine (Private, <code>docker.io</code>, the read-only token), image <code><var>&lt;docker-user&gt;</var>/chessbuddy-web:sha-<var>&lt;commit&gt;</var></code>, <span class="ui">CPU and Memory</span> 0.25 CPU / 0.5 Gi. Under <span class="ui">Environment variables</span> (Source: Manual entry) add:
+          <div class="table-wrap"><table>
+            <tr><th>Name</th><th>Value</th></tr>
+            <tr><td><code>ENGINE_URL</code></td><td>The engine's Application Url from step 4 plus <code>/mcp</code>, e.g. <code>https://chessbuddy-engine.internal.<var>&lt;id&gt;</var>.<var>&lt;region&gt;</var>.azurecontainerapps.io/mcp</code></td></tr>
+            <tr><td><code>API_PORT</code></td><td><code>3001</code></td></tr>
+            <tr><td><code>COACH_MODEL</code></td><td><code>claude-haiku-5-5</code> (cheapest) or <code>claude-sonnet-5-5</code></td></tr>
+            <tr><td><code>COACH_EFFORT</code></td><td><code>low</code> or <code>medium</code></td></tr>
+            <tr><td><code>ANALYSIS_DEPTH</code></td><td><code>16</code></td></tr>
+          </table></div>
+        </li>
+        <li><strong>Ingress</strong>: Enabled · <span class="ui">Ingress traffic</span>: <strong>Accepting traffic from anywhere</strong> · HTTP · <span class="ui">Target port</span> <code>3001</code> · insecure connections off.</li>
+        <li><span class="ui">Review + create</span> → <span class="ui">Create</span>.</li>
+        <li><span class="ui">Application → Scale</span>: Min 0, Max <strong>1</strong>. One replica keeps the analysis cache and the sign-in attempt limit in one place.</li>
+      </ol>
+    </section>
+
+    <section class="step" id="secrets">
+      <h2><span class="num">6</span> Add the secrets</h2>
+      <div class="grid2">
+        <div class="mini">
+          <h3>chessbuddy-engine</h3>
+          <ol>
+            <li><span class="ui">Settings → Secrets → Add</span>: key <code>engine-token</code>, type Container Apps secret, value = your engine token.</li>
+            <li><span class="ui">Application → Containers → Edit and deploy</span>, select the container, <span class="ui">Environment variables → Add</span>: <code>ENGINE_TOKEN</code>, Source <span class="ui">Reference a secret</span>, <code>engine-token</code>. <span class="ui">Save → Create</span>.</li>
+          </ol>
+        </div>
+        <div class="mini">
+          <h3>chessbuddy-web</h3>
+          <ol>
+            <li><span class="ui">Settings → Secrets</span>: add <code>engine-token</code>, <code>session-secret</code>, <code>sql-connection-string</code> and <code>anthropic-api-key</code>.</li>
+            <li><span class="ui">Edit and deploy</span> → container → add these variables, each with Source <span class="ui">Reference a secret</span>. <span class="ui">Save → Create</span>.</li>
+          </ol>
+        </div>
+      </div>
+      <div class="table-wrap"><table>
+        <tr><th>Variable (web app)</th><th>Secret</th><th>Why</th></tr>
+        <tr><td><code>ENGINE_TOKEN</code></td><td><code>engine-token</code></td><td>Must match the engine's token</td></tr>
+        <tr><td><code>SESSION_SECRET</code></td><td><code>session-secret</code></td><td>Without it, every restart (each cold start) signs you out</td></tr>
+        <tr><td><code>SQL_CONNECTION_STRING</code></td><td><code>sql-connection-string</code></td><td>Accounts in Azure SQL. Without it only the built-in account exists, in memory</td></tr>
+        <tr><td><code>ANTHROPIC_API_KEY</code></td><td><code>anthropic-api-key</code></td><td>Explain and follow-up questions</td></tr>
+      </table></div>
+    </section>
+
+    <section class="step" id="test">
+      <h2><span class="num">7</span> Sign in and test</h2>
+      <ol class="steps">
+        <li>Open <span class="ui">chessbuddy-web → Overview → Application Url</span>. After a quiet spell the first load takes a few seconds while the container starts.</li>
+        <li>Sign in as <code>kviiilyn37_</code> with the default password. The first sign-in creates the accounts table; if the database was paused it can take up to a minute (the screen says so).</li>
+        <li>The top bar should show <span class="ui">Engine ready</span> and your username. Play a move: it gets graded and the bot answers.</li>
+      </ol>
+      <p>If something is off, <span class="ui">Monitoring → Log stream</span> shows each container's output, and <span class="ui">Application → Revisions and replicas</span> shows whether a revision is Running or Failed. The web app logs <code>Accounts: Azure SQL</code> and <code>Engine: https://…/mcp</code> on startup.</p>
+    </section>
+
+    <section class="step" id="budget">
+      <h2><span class="num">8</span> Set a budget alert</h2>
+      <p>Search for <span class="ui">Cost Management → Budgets → Add</span>: scope your subscription, reset period Monthly, amount <code>$5</code>, alerts at 50% and 100% of actual cost to your email. A budget only warns; it doesn't stop anything.</p>
+      <p>In the SQL database, keep <span class="ui">auto-pause until next month</span> as the behavior when the free limit is reached (switching to "continue with charges" can't be undone), and consider an alert on the <span class="ui">Free amount remaining</span> metric.</p>
+    </section>
+
+    <section class="step" id="update">
+      <h2><span class="num">9</span> Deploy updates</h2>
+      <p>Push your changes to <code>master</code> and wait for the CI run to go green. New images don't reach Container Apps by themselves: in each app you want to update, open <span class="ui">Application → Containers → Edit and deploy</span>, select the container, change the tag to the run's new <code>sha-…</code> tag, then <span class="ui">Save → Create</span>.</p>
+      <p>The apps deploy separately. The engine image only changes when files under <code>docker/</code> change, so otherwise you can leave the engine on its current tag. If you change <code>ENGINE_TOKEN</code>, update the secret in both apps.</p>
+    </section>
+
+    <section class="step" id="password">
+      <h2><span class="num">10</span> Change the default password</h2>
+      <p>There's no sign-up or password screen yet, so change it in the database. Make a hash locally:</p>
+      <pre><code>npm run password:hash -- "<var>&lt;new password&gt;</var>"</code></pre>
+      <p>Then in the portal open the <span class="ui">SQL database → Query editor</span>, sign in, and run:</p>
+      <pre><code>UPDATE chessbuddy.Users SET PasswordHash = N'<var>&lt;hash from above&gt;</var>' WHERE Username = N'kviiilyn37_';</code></pre>
+      <p>Sessions already signed in stay valid until they expire (7 days). To sign everyone out at once, change <code>session-secret</code> and deploy a new revision.</p>
+    </section>
+
+    <section class="step" id="costs">
+      <h2>Costs and limits</h2>
+      <ul>
+        <li><strong>Container Apps free grant</strong> (per subscription, each month): 180,000 vCPU-seconds, 360,000 GiB-seconds and 2 million requests. You're billed only while a replica runs.</li>
+        <li>With the engine at 1 vCPU / 2 Gi and the web app at 0.25 / 0.5 Gi, that's roughly <strong>40 hours of play a month</strong> with one engine replica. A second engine replica uses it up faster. Past the grant, a rough estimate is about 15¢ an hour.</li>
+        <li>Replicas stay up a few minutes after the last request before scaling to zero. The app only checks status while its tab is visible, so a tab left in the background doesn't keep the containers running.</li>
+        <li>Keeping replicas always on (<span class="ui">Min replicas</span> above 0) goes past the free grant: two always-on engine replicas would be roughly $40 a month.</li>
+        <li><strong>Azure SQL free offer</strong>: 100,000 vCore-seconds a month. Only sign-in touches the database, and connections close after 30 seconds idle, so it can pause.</li>
+        <li><strong>Claude</strong>: only Explain and follow-up questions cost money. Haiku is the cheapest model.</li>
+      </ul>
+    </section>
+
+    <section class="step" id="trouble">
+      <h2>Troubleshooting</h2>
+      <div class="table-wrap"><table>
+        <tr><th>What you see</th><th>Likely cause and fix</th></tr>
+        <tr><td>"Couldn't reach the account database"</td><td>The Azure services exception in step 2 is off, the connection string is wrong, or the database used up its free amount and is paused until next month. The web app's log stream shows the SQL error.</td></tr>
+        <tr><td>"Engine unavailable" in the top bar</td><td><code>ENGINE_URL</code> must be the engine's internal <code>https://…</code> URL ending in <code>/mcp</code>. "Unauthorized" in the message means <code>ENGINE_TOKEN</code> differs between the apps. Check the engine revision is Running.</td></tr>
+        <tr><td>Signed out after every cold start</td><td><code>SESSION_SECRET</code> isn't set on the web app.</td></tr>
+        <tr><td>"Too many failed sign-ins"</td><td>Five wrong passwords from your address. Wait 15 minutes, or restart the web app's revision.</td></tr>
+        <tr><td>Revision failed: image pull error</td><td>The tag doesn't exist (check the repository's <span class="ui">Tags</span> on Docker Hub), the registry credentials are missing or wrong so Docker Hub's anonymous pull limit applies, or the image was built for ARM.</td></tr>
+        <tr><td>CI fails at "Check Docker Hub settings"</td><td>The <code>DOCKERHUB_USERNAME</code> variable or the <code>DOCKERHUB_TOKEN</code> secret is missing in the GitHub repo (step 3).</td></tr>
+        <tr><td>CI fails at "Sign in to Docker Hub" or the push is denied</td><td>The token is wrong, expired, or read-only. Generate a Read &amp; Write token and update the secret.</td></tr>
+        <tr><td>404 when opening the engine URL</td><td>Expected: the engine only answers apps inside the environment.</td></tr>
+        <tr><td>First request after a break is slow</td><td>Expected: containers start from zero and the database may be resuming.</td></tr>
+      </table></div>
+    </section>
+
+    <footer>
+      Local development is unchanged: <code>npm run dev</code> still starts the engine with <code>docker run -i</code> unless <code>ENGINE_URL</code> is set. Settings are listed in the README.
+    </footer>
+  </main>
+</div>
+<script>
+  for (const pre of document.querySelectorAll("pre")) {
+    const button = document.createElement("button");
+    button.className = "copy";
+    button.type = "button";
+    button.textContent = "Copy";
+    button.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(pre.querySelector("code").innerText);
+        button.textContent = "Copied";
+      } catch {
+        button.textContent = "Select and copy";
+      }
+      setTimeout(() => (button.textContent = "Copy"), 1500);
+    });
+    pre.appendChild(button);
+  }
+</script>
+</body>
+</html>

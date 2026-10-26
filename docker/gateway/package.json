@@ -1,0 +1,11 @@
+{
+  "name": "chessbuddy-engine-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP-over-HTTP front for mcp-stockfish, so the web app can reach the engine over the network.",
+  "main": "server.mjs",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1"
+  }
+}

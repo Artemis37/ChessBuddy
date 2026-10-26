@@ -3,6 +3,9 @@ import type { Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CoachReply, EngineLine, Explanation, MoveGrade } from "../shared/types";
 import { createApp, type AppDeps } from "./app";
+import { Auth } from "./auth/auth";
+import { hashPassword } from "./auth/password";
+import { MemoryUserStore } from "./auth/users";
 import { CoachError } from "./coach";
 
 const START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -60,21 +63,46 @@ function fakeCoach(overrides: Partial<AppDeps["coach"]> = {}): AppDeps["coach"] 
   };
 }
 
+const LOGIN = { username: "player", password: "correct horse battery" };
+const testUsers = hashPassword(LOGIN.password).then(
+  (passwordHash) => new MemoryUserStore([{ username: LOGIN.username, passwordHash }]),
+);
+
 let server: Server | undefined;
 
-async function start(deps: Partial<AppDeps> = {}) {
-  const { app } = createApp({ analyzer: fakeAnalyzer(), bot: fakeBot(), coach: fakeCoach(), analysisDepth: 10, ...deps });
+/** Starts the app. Calls keep the session cookie like a browser, signed in unless `signedIn` is false. */
+async function startServer(deps: Partial<AppDeps> = {}, { signedIn = true } = {}) {
+  const { app } = createApp({
+    analyzer: fakeAnalyzer(),
+    bot: fakeBot(),
+    coach: fakeCoach(),
+    auth: new Auth(await testUsers, "test-secret"),
+    analysisDepth: 10,
+    ...deps,
+  });
   server = app.listen(0);
   await new Promise((resolve) => server!.once("listening", resolve));
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return async (method: string, path: string, body?: unknown, raw?: string) => {
+  let cookie: string | undefined;
+  const call = async (method: string, path: string, body?: unknown, raw?: string) => {
+    const headers: Record<string, string> = {};
+    if (body !== undefined || raw !== undefined) headers["Content-Type"] = "application/json";
+    if (cookie) headers.Cookie = cookie;
     const res = await fetch(base + path, {
       method,
-      headers: body !== undefined || raw !== undefined ? { "Content-Type": "application/json" } : undefined,
+      headers,
       body: raw ?? (body === undefined ? undefined : JSON.stringify(body)),
     });
+    const setCookie = res.headers.get("set-cookie");
+    if (setCookie) cookie = setCookie.split(";")[0];
     return { status: res.status, body: await res.json() };
   };
+  if (signedIn) await call("POST", "/api/auth/login", LOGIN);
+  return { call, base };
+}
+
+async function start(deps: Partial<AppDeps> = {}) {
+  return (await startServer(deps)).call;
 }
 
 afterEach(() => {
@@ -387,6 +415,107 @@ describe("POST /api/eval", () => {
     await call("POST", "/api/grade", { fen: AFTER_E4, uci: "e7e5" });
     // One search for the position itself, one for the position after the graded move.
     expect(analyzed.filter((f) => f === AFTER_E4)).toHaveLength(1);
+  });
+});
+
+describe("sign-in", () => {
+  it("requires a session for every other API route", async () => {
+    const { call } = await startServer({}, { signedIn: false });
+    expect(await call("GET", "/api/status")).toEqual({ status: 401, body: { error: "Sign in first" } });
+    expect((await call("POST", "/api/grade", { fen: START, uci: "e2e4" })).status).toBe(401);
+    expect((await call("GET", "/api/nope")).status).toBe(401);
+  });
+
+  it("signs in, reports the account and signs out", async () => {
+    const { call } = await startServer({}, { signedIn: false });
+    expect(await call("GET", "/api/auth/me")).toEqual({ status: 401, body: { error: "Sign in first" } });
+    expect(await call("POST", "/api/auth/login", { ...LOGIN, password: "wrong" })).toEqual({
+      status: 401,
+      body: { error: "Wrong username or password" },
+    });
+    expect(await call("POST", "/api/auth/login", LOGIN)).toEqual({ status: 200, body: { username: "player" } });
+    expect(await call("GET", "/api/auth/me")).toEqual({ status: 200, body: { username: "player" } });
+    expect((await call("GET", "/api/status")).status).toBe(200);
+
+    expect(await call("POST", "/api/auth/logout")).toEqual({ status: 200, body: { ok: true } });
+    expect((await call("GET", "/api/auth/me")).status).toBe(401);
+    expect((await call("GET", "/api/status")).status).toBe(401);
+  });
+
+  it("matches usernames regardless of case and returns the stored name", async () => {
+    const { call } = await startServer({}, { signedIn: false });
+    expect(await call("POST", "/api/auth/login", { ...LOGIN, username: " PLAYER " })).toEqual({
+      status: 200,
+      body: { username: "player" },
+    });
+  });
+
+  it("rejects unknown usernames and empty fields", async () => {
+    const { call } = await startServer({}, { signedIn: false });
+    expect((await call("POST", "/api/auth/login", { ...LOGIN, username: "someone" })).body).toEqual({
+      error: "Wrong username or password",
+    });
+    expect(await call("POST", "/api/auth/login", { username: "", password: "" })).toEqual({
+      status: 400,
+      body: { error: "username: Enter your username; password: Enter your password" },
+    });
+  });
+
+  it("sets an HttpOnly session cookie, marked Secure behind an HTTPS proxy", async () => {
+    const { base } = await startServer({}, { signedIn: false });
+    const login = (headers: Record<string, string> = {}) =>
+      fetch(`${base}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...headers },
+        body: JSON.stringify(LOGIN),
+      });
+
+    const plain = (await login()).headers.get("set-cookie") ?? "";
+    expect(plain).toMatch(/^chessbuddy_session=[\w-]+\.[\w-]+;/);
+    expect(plain).toMatch(/HttpOnly/);
+    expect(plain).toMatch(/SameSite=Lax/);
+    expect(plain).toMatch(/Max-Age=604800/);
+    expect(plain).not.toMatch(/Secure/);
+
+    const proxied = (await login({ "X-Forwarded-Proto": "https" })).headers.get("set-cookie") ?? "";
+    expect(proxied).toMatch(/Secure/);
+  });
+
+  it("rejects a tampered session cookie", async () => {
+    const { base } = await startServer({}, { signedIn: false });
+    const res = await fetch(`${base}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(LOGIN),
+    });
+    const [payload] = (res.headers.get("set-cookie") ?? "").split(";")[0].split("=")[1].split(".");
+    const forged = Buffer.from(JSON.stringify({ u: "admin", exp: Date.now() + 60_000 })).toString("base64url");
+    for (const token of [`${forged}.${"x".repeat(43)}`, `${payload}.tampered`, payload]) {
+      const me = await fetch(`${base}/api/auth/me`, { headers: { Cookie: `chessbuddy_session=${token}` } });
+      expect(me.status).toBe(401);
+    }
+  });
+
+  it("blocks a client after five failed sign-ins", async () => {
+    const { call } = await startServer({}, { signedIn: false });
+    for (let i = 0; i < 5; i++) {
+      expect((await call("POST", "/api/auth/login", { ...LOGIN, password: `wrong ${i}` })).status).toBe(401);
+    }
+    const blocked = await call("POST", "/api/auth/login", LOGIN);
+    expect(blocked.status).toBe(429);
+    expect(blocked.body.error).toMatch(/Too many failed sign-ins/);
+  });
+
+  it("returns 503 when the account database can't be reached", async () => {
+    const down = new MemoryUserStore();
+    down.find = async () => {
+      throw new Error("ConnectionError: Failed to connect");
+    };
+    const { call } = await startServer({ auth: new Auth(down, "test-secret") }, { signedIn: false });
+    expect(await call("POST", "/api/auth/login", LOGIN)).toEqual({
+      status: 503,
+      body: { error: "Couldn't reach the account database. Try again in a minute." },
+    });
   });
 });
 

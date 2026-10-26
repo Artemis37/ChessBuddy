@@ -144,6 +144,11 @@ export interface StatusResponse {
   coach: { ready: boolean; defaultModel: string; error?: string };
 }
 
+/** The signed-in account, from /api/auth/login and /api/auth/me. */
+export interface SessionResponse {
+  username: string;
+}
+
 /** Bot strength: an approximate Chess.com rating, or full-strength Stockfish. */
 export type BotRating = number | "max";
 
