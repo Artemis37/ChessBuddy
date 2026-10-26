@@ -19,6 +19,9 @@ COPY tsconfig.json ./
 COPY shared ./shared
 COPY server ./server
 COPY --from=build /app/dist ./dist
+# CI passes the commit; /api/health reports it so the deploy job can tell the new build is up.
+ARG APP_VERSION=dev
+ENV APP_VERSION=$APP_VERSION
 USER node
 EXPOSE 3001
 CMD ["node", "--import", "tsx", "server/index.ts"]

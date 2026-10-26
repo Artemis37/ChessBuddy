@@ -3,6 +3,8 @@
 # <user>/chessbuddy-engine; pull requests only check that they build.
 # Needs the DOCKERHUB_USERNAME variable and the DOCKERHUB_TOKEN secret
 # (Settings → Secrets and variables → Actions). See docs/deploy-aca.html, step 3.
+# Once the ACA_RESOURCE_GROUP variable and the AZURE_* secrets are set (step 9), pushes to
+# master also deploy the new images to Azure Container Apps.
 name: CI
 
 on:
@@ -91,6 +93,8 @@ jobs:
           platforms: linux/amd64
           provenance: false
           push: ${{ env.PUSH == 'true' }}
+          # The web app reports it at /api/health; the engine image ignores it.
+          build-args: APP_VERSION=${{ github.sha }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.image }}
@@ -104,3 +108,54 @@ jobs:
             echo "### ${{ matrix.image }}"
             printf '%s\n' "$TAGS" | sed 's/.*/- `&`/'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Deploy to Azure Container Apps
+    needs: images
+    # Skipped until the Azure settings exist (docs/deploy-aca.html, step 9).
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request' && vars.ACA_RESOURCE_GROUP != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: aca-deploy
+    env:
+      RESOURCE_GROUP: ${{ vars.ACA_RESOURCE_GROUP }}
+      DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+    steps:
+      # Signs in with GitHub's OIDC token (a federated credential), so no Azure password is stored.
+      - name: Sign in to Azure
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      # Each container app is named like its image. The engine goes first so the new web app
+      # never talks to an older engine.
+      - name: Point the apps at this commit's images
+        run: |
+          tag="sha-${GITHUB_SHA::7}"
+          echo "### Deployed \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
+          for app in chessbuddy-engine chessbuddy-web; do
+            revision=$(az containerapp update --name "$app" --resource-group "$RESOURCE_GROUP" \
+              --image "docker.io/$DOCKERHUB_USERNAME/$app:$tag" \
+              --query properties.latestRevisionName --output tsv)
+            echo "- $app: revision \`$revision\`" >> "$GITHUB_STEP_SUMMARY"
+          done
+      - name: Wait for the new web app to answer
+        run: |
+          fqdn=$(az containerapp show --name chessbuddy-web --resource-group "$RESOURCE_GROUP" \
+            --query properties.configuration.ingress.fqdn --output tsv)
+          deadline=$((SECONDS + 300))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            version=$(curl -fsS --max-time 20 "https://$fqdn/api/health" | jq -r .version) || true
+            if [ "$version" = "$GITHUB_SHA" ]; then
+              echo "https://$fqdn is serving $GITHUB_SHA"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::https://$fqdn didn't serve $GITHUB_SHA within 5 minutes. Check chessbuddy-web → Revisions and replicas, and its log stream."
+          exit 1

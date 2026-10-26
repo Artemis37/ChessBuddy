@@ -161,7 +161,7 @@
       <li><a href="#secrets">6. Secrets</a></li>
       <li><a href="#test">7. Sign in and test</a></li>
       <li><a href="#budget">8. Budget alert</a></li>
-      <li><a href="#update">9. Deploy updates</a></li>
+      <li><a href="#update">9. Deploy updates automatically</a></li>
       <li><a href="#password">10. Change the password</a></li>
       <li><a href="#costs">Costs and limits</a></li>
       <li><a href="#trouble">Troubleshooting</a></li>
@@ -388,9 +388,34 @@ docker push <var>&lt;docker-user&gt;</var>/chessbuddy-web:manual-1</code></pre>
     </section>
 
     <section class="step" id="update">
-      <h2><span class="num">9</span> Deploy updates</h2>
-      <p>Push your changes to <code>master</code> and wait for the CI run to go green. New images don't reach Container Apps by themselves: in each app you want to update, open <span class="ui">Application → Containers → Edit and deploy</span>, select the container, change the tag to the run's new <code>sha-…</code> tag, then <span class="ui">Save → Create</span>.</p>
-      <p>The apps deploy separately. The engine image only changes when files under <code>docker/</code> change, so otherwise you can leave the engine on its current tag. If you change <code>ENGINE_TOKEN</code>, update the secret in both apps.</p>
+      <h2><span class="num">9</span> Deploy updates automatically</h2>
+      <p>After this one-time setup, every push to <code>master</code> deploys itself. The CI run gets a third job, <span class="ui">Deploy to Azure Container Apps</span>. It points both apps at the run's <code>sha-…</code> tag (engine first), which creates a new revision of each, then waits until the web app's <code>/api/health</code> reports the new commit. GitHub signs in to Azure with a short-lived token (a federated credential), so no Azure password or secret is stored anywhere.</p>
+      <h3>In Azure</h3>
+      <ol class="steps">
+        <li>Search the portal for <span class="ui">Microsoft Entra ID → App registrations → New registration</span>. Name <code>chessbuddy-github</code>, <span class="ui">Supported account types</span>: single tenant (this organizational directory only), no redirect URI → <span class="ui">Register</span>. On its <span class="ui">Overview</span>, copy the <span class="ui">Application (client) ID</span> and the <span class="ui">Directory (tenant) ID</span>.</li>
+        <li>In the registration, open <span class="ui">Certificates &amp; secrets → Federated credentials → Add credential</span>. <span class="ui">Federated credential scenario</span>: GitHub Actions deploying Azure resources. <span class="ui">Organization</span>: your GitHub user, with the same capitals, <span class="ui">Repository</span>: <code>ChessBuddy</code>, <span class="ui">Entity type</span>: Branch, <span class="ui">GitHub branch name</span>: <code>master</code>, <span class="ui">Name</span>: <code>chessbuddy-master</code> → <span class="ui">Add</span>. These must match the repo exactly, or the sign-in is refused.
+          <ul>
+            <li>The form also asks for <span class="ui">Organization ID</span> and <span class="ui">Repository ID</span>, GitHub's numeric IDs, which don't change if you rename anything. Open <code>https://api.github.com/repos/<var>&lt;github-user&gt;</var>/ChessBuddy</code> in a browser: the first <code>"id"</code> is the repository ID, and <code>"id"</code> under <code>"owner"</code> is the organization ID (for a personal account, your user's ID).</li>
+            <li>The <span class="ui">Subject identifier</span> then reads <code>repo:<var>&lt;github-user&gt;</var>@<var>&lt;owner id&gt;</var>/ChessBuddy@<var>&lt;repo id&gt;</var>:ref:refs/heads/master</code>. GitHub uses this format for repositories created after 15 July 2026. An older repository still sends <code>repo:<var>&lt;github-user&gt;</var>/ChessBuddy:ref:refs/heads/master</code> unless you turn on immutable subject claims in its OIDC settings.</li>
+          </ul>
+        </li>
+        <li>Open the resource group <code>chessbuddy-rg</code> → <span class="ui">Access control (IAM) → Add → Add role assignment</span>. On the <span class="ui">Privileged administrator roles</span> tab pick <span class="ui">Contributor</span> → <span class="ui">Next</span>. <span class="ui">Assign access to</span>: User, group, or service principal → <span class="ui">Select members</span> → <code>chessbuddy-github</code> → <span class="ui">Review + assign</span>. The role covers only this resource group.</li>
+        <li>Copy your <span class="ui">Subscription ID</span> from <span class="ui">Subscriptions</span>.</li>
+      </ol>
+      <h3>In GitHub</h3>
+      <p>In the repo's <span class="ui">Settings → Secrets and variables → Actions</span>, add:</p>
+      <div class="table-wrap"><table>
+        <tr><th>Name</th><th>Where</th><th>Value</th></tr>
+        <tr><td><code>AZURE_CLIENT_ID</code></td><td>Secret</td><td>Application (client) ID</td></tr>
+        <tr><td><code>AZURE_TENANT_ID</code></td><td>Secret</td><td>Directory (tenant) ID</td></tr>
+        <tr><td><code>AZURE_SUBSCRIPTION_ID</code></td><td>Secret</td><td>Subscription ID</td></tr>
+        <tr><td><code>ACA_RESOURCE_GROUP</code></td><td>Variable</td><td><code>chessbuddy-rg</code>. The deploy job is skipped while this is missing.</td></tr>
+      </table></div>
+      <p>Then push to <code>master</code>, or re-run the latest CI run (<span class="ui">Actions → CI → Run workflow</span>). The run's summary lists the new revisions.</p>
+      <div class="callout">
+        <p>The job expects the container apps to be named like the images, <code>chessbuddy-engine</code> and <code>chessbuddy-web</code>, and keeps their registry credentials, secrets and environment variables. Each deploy briefly starts both apps, which uses a minute or two of the free grant. Only pushes to <code>master</code> deploy; pull requests and <code>v*</code> tags don't.</p>
+      </div>
+      <p>To deploy by hand instead, open <span class="ui">Application → Containers → Edit and deploy</span> in an app, select the container, change the tag to a <code>sha-…</code> tag from Docker Hub, then <span class="ui">Save → Create</span>. If you change <code>ENGINE_TOKEN</code>, update the secret in both apps.</p>
     </section>
 
     <section class="step" id="password">
@@ -423,8 +448,13 @@ docker push <var>&lt;docker-user&gt;</var>/chessbuddy-web:manual-1</code></pre>
         <tr><td>Signed out after every cold start</td><td><code>SESSION_SECRET</code> isn't set on the web app.</td></tr>
         <tr><td>"Too many failed sign-ins"</td><td>Five wrong passwords from your address. Wait 15 minutes, or restart the web app's revision.</td></tr>
         <tr><td>Revision failed: image pull error</td><td>The tag doesn't exist (check the repository's <span class="ui">Tags</span> on Docker Hub), the registry credentials are missing or wrong so Docker Hub's anonymous pull limit applies, or the image was built for ARM.</td></tr>
+        <tr><td>"The TargetPort 3001 does not match the listening port 8080" on <code>chessbuddy-web</code></td><td>The web app is running the engine image: only <code>chessbuddy-engine</code> listens on 8080. Set the image to <code><var>&lt;docker-user&gt;</var>/chessbuddy-web:sha-…</code> (step 5), and make sure <code>API_PORT</code> is <code>3001</code> or not set. The log stream should show <code>ChessBuddy server on http://localhost:3001</code>, not <code>Engine gateway on port 8080</code>.</td></tr>
         <tr><td>CI fails at "Check Docker Hub settings"</td><td>The <code>DOCKERHUB_USERNAME</code> variable or the <code>DOCKERHUB_TOKEN</code> secret is missing in the GitHub repo (step 3).</td></tr>
         <tr><td>CI fails at "Sign in to Docker Hub" or the push is denied</td><td>The token is wrong, expired, or read-only. Generate a Read &amp; Write token and update the secret.</td></tr>
+        <tr><td>Deploy fails at "Sign in to Azure": no matching federated identity record</td><td>The federated credential's organization, repository or branch doesn't match the repo, or one of the <code>AZURE_*</code> secrets is wrong (step 9).</td></tr>
+        <tr><td>Deploy fails with <code>AuthorizationFailed</code></td><td>The Contributor role on <code>chessbuddy-rg</code> is missing or hasn't applied yet. Wait a few minutes and re-run the job.</td></tr>
+        <tr><td>Deploy fails with <code>ResourceNotFound</code></td><td>A container app isn't named <code>chessbuddy-engine</code> / <code>chessbuddy-web</code>, or <code>ACA_RESOURCE_GROUP</code> names another group.</td></tr>
+        <tr><td>Deploy fails at "Wait for the new web app to answer"</td><td>The new web revision didn't start. <span class="ui">Revisions and replicas</span> and the log stream show why; the previous revision keeps serving meanwhile.</td></tr>
         <tr><td>404 when opening the engine URL</td><td>Expected: the engine only answers apps inside the environment.</td></tr>
         <tr><td>First request after a break is slow</td><td>Expected: containers start from zero and the database may be resuming.</td></tr>
       </table></div>

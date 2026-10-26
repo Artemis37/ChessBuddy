@@ -48,6 +48,7 @@ const { app, checkEngine, engineError } = createApp({
   auth,
   analysisDepth: ANALYSIS_DEPTH,
   distDir: path.resolve("dist"),
+  version: process.env.APP_VERSION,
 });
 
 // Express 5 also calls this when listening fails (for example, the port is taken).

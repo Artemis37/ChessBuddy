@@ -426,6 +426,11 @@ describe("sign-in", () => {
     expect((await call("GET", "/api/nope")).status).toBe(401);
   });
 
+  it("answers /api/health without a session, with the build's version", async () => {
+    const { call } = await startServer({ version: "cff61ea" }, { signedIn: false });
+    expect(await call("GET", "/api/health")).toEqual({ status: 200, body: { ok: true, version: "cff61ea" } });
+  });
+
   it("signs in, reports the account and signs out", async () => {
     const { call } = await startServer({}, { signedIn: false });
     expect(await call("GET", "/api/auth/me")).toEqual({ status: 401, body: { error: "Sign in first" } });

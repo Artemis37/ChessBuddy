@@ -36,6 +36,8 @@ export interface AppDeps {
   analysisDepth: number;
   /** Built client to serve, if it exists. */
   distDir?: string;
+  /** The commit the image was built from (APP_VERSION), reported by /api/health. */
+  version?: string;
 }
 
 class BadRequest extends Error {}
@@ -86,7 +88,7 @@ function parse<S extends z.ZodTypeAny>(schema: S, body: unknown): z.output<S> {
   return result.data;
 }
 
-export function createApp({ analyzer: engine, bot, coach, auth, analysisDepth, distDir }: AppDeps) {
+export function createApp({ analyzer: engine, bot, coach, auth, analysisDepth, distDir, version = "dev" }: AppDeps) {
   // The evaluation bar and grading often ask about the same position, so analyses are cached.
   const analyzer = new CachedAnalyzer(engine);
   const coachModels = [...new Set<string>([coach.defaultModel, ...COACH_MODELS.map((m) => m.id)])];
@@ -135,6 +137,12 @@ export function createApp({ analyzer: engine, bot, coach, auth, analysisDepth, d
     const username = auth.sessionUser(req.headers.cookie);
     if (!username) throw new AuthError(401, "Sign in first");
     res.json({ username } satisfies SessionResponse);
+  });
+
+  // Public, and touches neither the engine nor the database: the deploy job polls it until the
+  // new build answers.
+  app.get("/api/health", (_req, res) => {
+    res.json({ ok: true, version });
   });
 
   app.use("/api", (req, _res, next) => {
