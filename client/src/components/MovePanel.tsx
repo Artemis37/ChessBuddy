@@ -9,6 +9,7 @@ import {
 } from "../../../shared/types";
 import { CLASSIFICATION, colorName, moveNumber, type PlayedMove, type Questions } from "../game";
 import { activePath, type ThreadEntry } from "../thread";
+import { GradeIcon } from "./icons";
 
 /** Index the callbacks get for the starting position, which has no move. */
 export const START_INDEX = -1;
@@ -215,7 +216,7 @@ export function MovePanel({
       <div className="panel-head">
         <PanelTitle title={title} owner={owner} />
         <span className={`tag ${grade.classification}`}>
-          {info.symbol} {info.label}
+          <GradeIcon kind={grade.classification} /> {info.label}
         </span>
       </div>
 

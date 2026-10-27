@@ -43,13 +43,14 @@ export interface PlayedMove extends Questions {
   explainError?: string;
 }
 
-export const CLASSIFICATION: Record<Classification, { label: string; symbol: string }> = {
-  best: { label: "Best", symbol: "★" },
-  excellent: { label: "Excellent", symbol: "!" },
-  good: { label: "Good", symbol: "✓" },
-  inaccuracy: { label: "Inaccuracy", symbol: "?!" },
-  mistake: { label: "Mistake", symbol: "?" },
-  blunder: { label: "Blunder", symbol: "??" },
+/** Each grade's name; its icon is chess.com's, in client/public/grades (see GradeIcon). */
+export const CLASSIFICATION: Record<Classification, { label: string }> = {
+  best: { label: "Best" },
+  excellent: { label: "Excellent" },
+  good: { label: "Good" },
+  inaccuracy: { label: "Inaccuracy" },
+  mistake: { label: "Mistake" },
+  blunder: { label: "Blunder" },
 };
 
 export function colorName(color: Color): string {

@@ -1,7 +1,7 @@
 import { Chess, type PieceSymbol, type Square } from "chess.js";
 import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from "react";
 import type { Classification, Color } from "../../../shared/types";
-import { BookIcon } from "../components/icons";
+import { GradeIcon } from "../components/icons";
 import { CLASSIFICATION } from "../game";
 import { cellOf, displaySquares, isLightSquare, squareAtPoint } from "./geometry";
 import {
@@ -497,7 +497,7 @@ function GradeBadge({ badge, orientation, squareSize }: { badge: BoardBadge; ori
       aria-label={label}
       title={label}
     >
-      {badge.kind === "book" ? <BookIcon /> : CLASSIFICATION[badge.kind].symbol}
+      <GradeIcon kind={badge.kind} />
     </span>
   );
 }

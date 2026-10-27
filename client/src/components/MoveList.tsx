@@ -1,7 +1,7 @@
 import { useEffect, useRef, type Ref } from "react";
 import type { Opening } from "../../../shared/openings";
 import { CLASSIFICATION, type PlayedMove } from "../game";
-import { BookIcon } from "./icons";
+import { GradeIcon } from "./icons";
 
 interface Props {
   moves: PlayedMove[];
@@ -141,8 +141,8 @@ function MoveCell({
     >
       <span>{move.san}</span>
       {move.book && !cls && !pending && (
-        <span className="badge book" title="Book move">
-          <BookIcon />
+        <span className="move-grade" title="Book move">
+          <GradeIcon kind="book" />
         </span>
       )}
       {pending && <span className="badge pending" aria-label="Analyzing" />}
@@ -151,7 +151,11 @@ function MoveCell({
           ×
         </span>
       )}
-      {cls && <span className={`badge ${cls}`}>{CLASSIFICATION[cls].symbol}</span>}
+      {cls && (
+        <span className="move-grade">
+          <GradeIcon kind={cls} />
+        </span>
+      )}
     </button>
   );
 }

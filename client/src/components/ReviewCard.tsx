@@ -14,6 +14,7 @@ import {
 } from "../chesscom";
 import { CLASSIFICATION, colorName, moveNumber, type PlayedMove } from "../game";
 import { dateLabel, scoreOf, sideOf, timeControlLabel, toReviewGame, type ReviewGame } from "../review";
+import { GradeIcon } from "./icons";
 
 const chesscom = new ChessCom();
 const CLASSES = Object.keys(CLASSIFICATION) as Classification[];
@@ -421,7 +422,7 @@ function GameSummary({
           {CLASSES.map((c) => (
             <tr key={c}>
               <th scope="row">
-                <span className={`badge ${c}`}>{CLASSIFICATION[c].symbol}</span> {CLASSIFICATION[c].label}
+                <GradeIcon kind={c} /> {CLASSIFICATION[c].label}
               </th>
               {players.map((p) => (
                 <td key={p.color}>{counts[p.color][c]}</td>
