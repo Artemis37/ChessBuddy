@@ -3,6 +3,7 @@ import path from "node:path";
 import { Chess } from "chess.js";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { z } from "zod";
+import { isBandRating, RATING_BANDS } from "../shared/explorer";
 import {
   COACH_MODELS,
   coachModelLabel,
@@ -22,6 +23,7 @@ import { opponent, toMoveInput } from "./analysis/motifs";
 import { evaluatePosition } from "./analysis/position";
 import { MAX_PLAYABLE_RATING, MIN_PLAYABLE_RATING } from "./bot/strength";
 import { CoachError, type AskSubject, type Coach } from "./coach";
+import { ExplorerError, NO_TOKEN, type LichessExplorer } from "./explorer";
 
 interface EngineConnection {
   warmUp(): Promise<void>;
@@ -33,6 +35,8 @@ export interface AppDeps {
   /** A separate connection for bot moves, so the bot never waits behind grading. */
   bot: EngineConnection & { move(fen: string, rating: BotRating): Promise<string | null> };
   coach: Pick<Coach, "configured" | "defaultModel" | "explain" | "ask">;
+  /** How often each move is played, from the Lichess opening explorer (LICHESS_TOKEN). */
+  explorer: Pick<LichessExplorer, "configured" | "stats">;
   /** Sign-in. Every /api route except the /api/auth ones needs a signed-in session. */
   auth: Pick<Auth, "signIn" | "sessionUser">;
   analysisDepth: number;
@@ -96,6 +100,7 @@ export function createApp({
   analyzer: engine,
   bot,
   coach,
+  explorer,
   auth,
   analysisDepth,
   gradingEngines = 1,
@@ -186,6 +191,7 @@ export function createApp({
         defaultModel: defaultModelFor(userOf(res)),
         error: coach.configured ? undefined : "Add ANTHROPIC_API_KEY to .env and restart the server.",
       },
+      explorer: { ready: explorer.configured, error: explorer.configured ? undefined : NO_TOKEN },
     };
     res.json(status);
   });
@@ -217,6 +223,29 @@ export function createApp({
     const body = parse(z.object({ fen }), req.body);
     const result = await withEngine("analyzer", () => evaluatePosition(analyzer, body.fen, analysisDepth));
     res.json(result satisfies PositionEval);
+  });
+
+  // background: the other rating bands, asked after the one on screen; they wait behind it.
+  app.post("/api/explorer", async (req, res) => {
+    const body = parse(
+      z.object({
+        fen,
+        rating: z.number().refine(isBandRating, `Must be one of ${RATING_BANDS.map((b) => b.rating).join(", ")}`),
+        background: z.boolean().default(false),
+      }),
+      req.body,
+    );
+    // The client cancels requests for a position it has left; drop them if they're still queued.
+    const gone = new AbortController();
+    res.on("close", () => {
+      if (!res.writableFinished) gone.abort();
+    });
+    try {
+      res.json(await explorer.stats(body.fen, body.rating, { background: body.background, signal: gone.signal }));
+    } catch (err) {
+      if (gone.signal.aborted) return;
+      throw err;
+    }
   });
 
   const grade = z.custom<MoveGrade>((v) => typeof v === "object" && v !== null, "Required");
@@ -310,7 +339,7 @@ export function createApp({
     const status =
       err instanceof BadRequest
         ? 400
-        : err instanceof AuthError
+        : err instanceof AuthError || err instanceof ExplorerError
           ? err.status
           : err instanceof CoachError
             ? 503

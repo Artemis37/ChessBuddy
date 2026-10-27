@@ -1,12 +1,14 @@
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
+import type { ExplorerStats } from "../shared/explorer";
 import type { CoachReply, EngineLine, Explanation, MoveGrade } from "../shared/types";
 import { createApp, type AppDeps } from "./app";
 import { Auth } from "./auth/auth";
 import { hashPassword } from "./auth/password";
 import { MemoryUserStore, OWNER_USERNAME, ownerAccount } from "./auth/users";
 import { CoachError } from "./coach";
+import { ExplorerError, NO_TOKEN } from "./explorer";
 
 const START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 // White to move; Qf7 stalemates the black king on h8.
@@ -63,6 +65,12 @@ function fakeCoach(overrides: Partial<AppDeps["coach"]> = {}): AppDeps["coach"] 
   };
 }
 
+const STATS: ExplorerStats = { white: 6, draws: 1, black: 3, moves: [{ san: "e4", white: 4, draws: 1, black: 1 }] };
+
+function fakeExplorer(overrides: Partial<AppDeps["explorer"]> = {}): AppDeps["explorer"] {
+  return { configured: true, stats: async () => STATS, ...overrides };
+}
+
 const LOGIN = { username: "player", password: "correct horse battery" };
 const VIP_LOGIN = { username: "friend", password: "another long password" };
 const testUsers = Promise.all([hashPassword(LOGIN.password), hashPassword(VIP_LOGIN.password)]).then(
@@ -84,6 +92,7 @@ async function startServer(deps: Partial<AppDeps> = {}, { signedIn = true, login
     analyzer: fakeAnalyzer(),
     bot: fakeBot(),
     coach: fakeCoach(),
+    explorer: fakeExplorer(),
     auth: new Auth(await testUsers, "test-secret"),
     analysisDepth: 10,
     ...deps,
@@ -120,12 +129,23 @@ afterEach(() => {
 });
 
 describe("GET /api/status", () => {
-  it("reports engine and coach readiness", async () => {
+  it("reports engine, coach and opening explorer readiness", async () => {
     const call = await start();
     expect(await call("GET", "/api/status")).toEqual({
       status: 200,
-      body: { engine: { ready: true, gradingEngines: 1 }, coach: { ready: true, defaultModel: "claude-sonnet-5-5" } },
+      body: {
+        engine: { ready: true, gradingEngines: 1 },
+        coach: { ready: true, defaultModel: "claude-sonnet-5-5" },
+        explorer: { ready: true },
+      },
     });
+  });
+
+  it("tells the user to add a Lichess token when the opening explorer is not configured", async () => {
+    const call = await start({ explorer: fakeExplorer({ configured: false }) });
+    const { body } = await call("GET", "/api/status");
+    expect(body.explorer.ready).toBe(false);
+    expect(body.explorer.error).toMatch(/LICHESS_TOKEN/);
   });
 
   it("reports how many moves the server grades at once, so a review asks for that many", async () => {
@@ -685,6 +705,52 @@ describe("sign-in", () => {
       status: 503,
       body: { error: "Couldn't reach the account database. Try again in a minute." },
     });
+  });
+});
+
+describe("POST /api/explorer", () => {
+  it("returns how often each move is played in the rating band", async () => {
+    const asked: unknown[] = [];
+    const call = await start({
+      explorer: fakeExplorer({
+        stats: async (fen, rating, options) => {
+          asked.push([fen, rating, options?.background]);
+          return STATS;
+        },
+      }),
+    });
+    expect(await call("POST", "/api/explorer", { fen: START, rating: 1400 })).toEqual({ status: 200, body: STATS });
+    await call("POST", "/api/explorer", { fen: START, rating: 2500, background: true });
+    expect(asked).toEqual([
+      [START, 1400, false],
+      [START, 2500, true],
+    ]);
+  });
+
+  it("accepts only the explorer's rating bands", async () => {
+    const call = await start();
+    const { status, body } = await call("POST", "/api/explorer", { fen: START, rating: 1500 });
+    expect(status).toBe(400);
+    expect(body.error).toMatch(/rating: Must be one of 0, 1000, 1200/);
+  });
+
+  it("passes on the explorer's error with its status", async () => {
+    const call = await start({
+      explorer: fakeExplorer({
+        stats: async () => {
+          throw new ExplorerError(503, NO_TOKEN);
+        },
+      }),
+    });
+    expect(await call("POST", "/api/explorer", { fen: START, rating: 1400 })).toEqual({
+      status: 503,
+      body: { error: NO_TOKEN },
+    });
+  });
+
+  it("needs a session", async () => {
+    const { call } = await startServer({}, { signedIn: false });
+    expect((await call("POST", "/api/explorer", { fen: START, rating: 1400 })).status).toBe(401);
   });
 });
 

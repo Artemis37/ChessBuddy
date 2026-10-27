@@ -1167,12 +1167,199 @@ select {
 }
 
 .line-tag {
+  position: relative;
   padding: 1px 8px;
   border-radius: 999px;
   background: var(--book-line);
   color: #fff;
   font-size: 11px;
   font-weight: 700;
+}
+
+/* How often each move is played, from the Lichess opening explorer. */
+
+.openings .book-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 14px 0 2px;
+}
+
+.openings .book-head h3 {
+  margin: 0;
+}
+
+.openings .band-select {
+  display: inline-block;
+  margin: 0;
+  padding: 3px 6px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.band-caption {
+  margin: 0 0 4px;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.band-caption.error-text {
+  color: var(--error);
+}
+
+.book-move {
+  position: relative;
+}
+
+.book-move .book-san,
+.book-move .book-name {
+  position: relative;
+}
+
+/* Behind the row: as wide as the share of games that go on with the move. */
+.share-bar {
+  position: absolute;
+  left: 0;
+  top: 3px;
+  bottom: 3px;
+  border-radius: 0 3px 3px 0;
+  background: rgba(255, 255, 255, 0.07);
+  pointer-events: none;
+  transition: width 0.3s;
+}
+
+.book-move.in-line .share-bar {
+  background: rgba(82, 155, 220, 0.25);
+}
+
+.book-share {
+  position: relative;
+  flex: 0 0 38px;
+  text-align: right;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.book-share.few {
+  color: var(--muted);
+}
+
+.share-placeholder {
+  display: inline-block;
+  width: 26px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-3);
+  vertical-align: middle;
+}
+
+.book-move.off-book .book-san {
+  color: var(--text-body);
+  font-weight: 400;
+}
+
+.book-move.off-book .book-name {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.book-sep {
+  padding: 8px 8px 2px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* Fixed height, so hovering another move or loading a band never moves anything. */
+.band-chart {
+  height: 112px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.band-chart-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.band-chart-head > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.band-cols,
+.band-axis {
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  gap: 4px;
+}
+
+.band-cols {
+  align-items: end;
+  height: 40px;
+  margin-top: 6px;
+}
+
+.band-col {
+  min-height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: #5d5b57;
+  transition: height 0.3s;
+}
+
+.band-col.chosen {
+  background: var(--book-line);
+}
+
+.band-col.pending {
+  height: 4px;
+  background: var(--surface-3);
+}
+
+.band-axis {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.results {
+  display: flex;
+  height: 8px;
+  margin-top: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--surface-3);
+}
+
+.results-white {
+  background: var(--square-light);
+}
+
+.results-draw {
+  background: var(--muted);
+}
+
+.results-black {
+  background: #1a1918;
+}
+
+.results-text {
+  margin: 3px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Reviewing a game */

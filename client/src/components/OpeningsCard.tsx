@@ -1,5 +1,15 @@
 import { Chess } from "chess.js";
 import { useMemo, useState } from "react";
+import {
+  byShare,
+  EXPLORER_SPEEDS,
+  formatGames,
+  formatShare,
+  gameCount,
+  moveShare,
+  RATING_BANDS,
+  type ExplorerStats,
+} from "../../../shared/explorer";
 import { numberedLine } from "../../../shared/notation";
 import {
   divergence,
@@ -12,11 +22,17 @@ import {
   type OpeningFamily,
   type OpeningLine,
 } from "../../../shared/openings";
+import { loadBand, saveBand, useExplorerStats } from "../explorer";
 import { moveNumber, type PlayedMove } from "../game";
 
 const START_FEN = new Chess().fen();
 /** Lines listed for a search across every opening; a longer query narrows it down. */
 const MAX_RESULTS = 40;
+/** Moves off the book are listed once at least this percentage of the band's games go on with them. */
+const ALSO_PLAYED = 2;
+/** Below this many games in the band, the percentages are greyed out: too few to go by. */
+const FEW_GAMES = 100;
+const SPEEDS_LABEL = EXPLORER_SPEEDS.join(" and ");
 
 interface Props {
   /** Every named line; null while they load, empty if they couldn't be loaded. */
@@ -36,6 +52,8 @@ interface Props {
   /** The book move under the pointer, drawn on the board; null when the pointer leaves. */
   onHover: (uci: string | null) => void;
   onBackToLine: () => void;
+  /** Whether the server can ask the Lichess opening explorer how often each move is played; null until known. */
+  explorer: { ready: boolean; error?: string } | null;
 }
 
 /** Learning openings: pick a line, then follow it, see the book moves and find your way back. */
@@ -195,6 +213,17 @@ function bookChoices(fen: string, moves: string[], book: OpeningBook | null): Bo
   });
 }
 
+/** Moves off the book that at least ALSO_PLAYED percent of the band's games went on with, most played first. */
+function alsoPlayed(fen: string, stats: ExplorerStats, inBook: BookChoice[]): BookChoice[] {
+  const sans = new Set(inBook.map((choice) => choice.san));
+  const popular = stats.moves.filter((m) => !sans.has(m.san) && moveShare(stats, m.san) >= ALSO_PLAYED);
+  return bookChoices(
+    fen,
+    popular.map((m) => m.san),
+    null,
+  );
+}
+
 function StudyView({
   study,
   next,
@@ -205,6 +234,7 @@ function StudyView({
   onPlay,
   onHover,
   onBackToLine,
+  explorer,
   onChange,
 }: Props & { study: OpeningLine; onChange: () => void }) {
   const leftAt = divergence(
@@ -217,6 +247,81 @@ function StudyView({
   const family = familyName(study.name);
   // Within the opening being learned, its name goes without saying.
   const shortName = (name: string) => (familyName(name) === family ? variationName(name) || name : name);
+
+  const statsReady = explorer?.ready ?? false;
+  const [band, setBand] = useState(loadBand);
+  /** The move under the pointer or the keyboard focus, shown in the chart. */
+  const [focus, setFocus] = useState<string | null>(null);
+  const explored = useExplorerStats(fen, band, statsReady);
+  const bandIndex = RATING_BANDS.findIndex((b) => b.rating === band);
+  const here = explored.stats[bandIndex];
+  const few = here !== undefined && gameCount(here) < FEW_GAMES;
+  // The most played first, once the band's numbers are in; until then, the book's order.
+  const ordered = here ? byShare(choices, (choice) => moveShare(here, choice.san)) : choices;
+  const offBook = here ? alsoPlayed(fen, here, choices) : [];
+  const listed = [...ordered, ...offBook];
+  const focused =
+    listed.find((choice) => choice.san === focus) ?? ordered.find((choice) => choice.san === lineNext) ?? listed[0];
+
+  const point = (choice: BookChoice | null) => {
+    onHover(choice?.uci ?? null);
+    setFocus(choice?.san ?? null);
+  };
+  const pickBand = (rating: number) => {
+    setBand(rating);
+    saveBand(rating);
+    // The rows move to the new band's order, so the pointer may no longer be on the move it showed.
+    point(null);
+  };
+
+  const row = (choice: BookChoice, inBook: boolean) => {
+    const share = here ? moveShare(here, choice.san) : 0;
+    const inLine = choice.san === lineNext;
+    let shareText;
+    if (here) shareText = formatShare(share);
+    else if (explored.error) shareText = "–";
+    else shareText = <span className="share-placeholder" />;
+    return (
+      <li key={choice.uci}>
+        <button
+          className={`book-move ${inLine ? "in-line" : ""} ${inBook ? "" : "off-book"}`}
+          onClick={() => onPlay(choice.uci)}
+          onMouseEnter={() => point(choice)}
+          onFocus={() => point(choice)}
+          onBlur={() => onHover(null)}
+        >
+          {statsReady && <span className="share-bar" style={{ width: `${Math.min(100, share)}%` }} />}
+          <span className="book-san">{choice.label}</span>
+          <span className="book-name">{inBook ? (choice.name ? shortName(choice.name) : "") : "Not in the book"}</span>
+          {inLine && <span className="line-tag">line</span>}
+          {statsReady && (
+            <span
+              className={`book-share ${few ? "few" : ""}`}
+              title={here ? `${formatGames(gameCount(here))} games at this level${few ? ": too few to go by" : ""}` : undefined}
+            >
+              {shareText}
+            </span>
+          )}
+        </button>
+      </li>
+    );
+  };
+
+  let caption = null;
+  if (statsReady) {
+    const games = here ? (gameCount(here) === 0 ? "no games" : `${formatGames(gameCount(here))} games`) : "loading…";
+    caption = explored.error ? (
+      <p className="band-caption error-text" title={explored.error}>
+        {explored.error}
+      </p>
+    ) : explored.slow ? (
+      <p className="band-caption">Waiting: Lichess allows 20 requests a minute…</p>
+    ) : (
+      <p className="band-caption">
+        Lichess {RATING_BANDS[bandIndex].lichess} · {SPEEDS_LABEL} · {games}
+      </p>
+    );
+  }
 
   let status;
   if (leftAt !== null) {
@@ -269,31 +374,117 @@ function StudyView({
         </div>
       )}
 
-      <h3>Book moves here</h3>
-      {choices.length > 0 ? (
-        <ul className="book-moves" onMouseLeave={() => onHover(null)}>
-          {choices.map((choice) => (
-            <li key={choice.uci}>
-              <button
-                className={`book-move ${choice.san === lineNext ? "in-line" : ""}`}
-                onClick={() => onPlay(choice.uci)}
-                onMouseEnter={() => onHover(choice.uci)}
-                onFocus={() => onHover(choice.uci)}
-                onBlur={() => onHover(null)}
-              >
-                <span className="book-san">{choice.label}</span>
-                <span className="book-name">{choice.name ? shortName(choice.name) : ""}</span>
-                {choice.san === lineNext && <span className="line-tag">line</span>}
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : (
+      <div className="book-head">
+        <h3>Book moves here</h3>
+        {statsReady && (
+          <select
+            className="band-select"
+            value={band}
+            onChange={(e) => pickBand(Number(e.target.value))}
+            aria-label="Players' rating"
+            title="Players' approximate Chess.com rating"
+          >
+            {RATING_BANDS.map((b) => (
+              <option key={b.rating} value={b.rating}>
+                Players ≈ {b.chessCom}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+      {caption}
+      {choices.length === 0 && (
         <p className="muted small">
           No book moves here: the opening book ends. Keep exploring; moves off the book are graded and the
           evaluation bar shows how the position stands.
         </p>
       )}
+      {listed.length > 0 && (
+        <ul className="book-moves" onMouseLeave={() => point(null)}>
+          {ordered.map((choice) => row(choice, true))}
+          {offBook.length > 0 && <li className="book-sep">Also played here</li>}
+          {offBook.map((choice) => row(choice, false))}
+        </ul>
+      )}
+      {statsReady && focused && (
+        <BandChart
+          choice={focused}
+          name={offBook.includes(focused) ? "not in the book" : focused.name ? shortName(focused.name) : ""}
+          stats={explored.stats}
+          band={band}
+        />
+      )}
+      {explorer && !explorer.ready && explorer.error && <p className="muted small">{explorer.error}</p>}
     </section>
+  );
+}
+
+/** How often one move is played across the rating bands, and how its games ended in the chosen band. */
+function BandChart({
+  choice,
+  name,
+  stats,
+  band,
+}: {
+  choice: BookChoice;
+  name: string;
+  /** Each band's statistics, in RATING_BANDS order; undefined while one loads. */
+  stats: (ExplorerStats | undefined)[];
+  band: number;
+}) {
+  const shares = stats.map((s) => (s ? moveShare(s, choice.san) : null));
+  const top = Math.max(0, ...shares.map((s) => s ?? 0));
+  const chosen = RATING_BANDS.findIndex((b) => b.rating === band);
+  const here = stats[chosen];
+  const move = here?.moves.find((m) => m.san === choice.san);
+  const games = move ? gameCount(move) : 0;
+  const percent = (count: number) => (games > 0 ? (count / games) * 100 : 0);
+  const level = `≈ ${RATING_BANDS[chosen].chessCom}`;
+
+  let results = " ";
+  if (here && games === 0) results = `Not played at ${level}`;
+  else if (move) {
+    results = `White ${Math.round(percent(move.white))}% · draw ${Math.round(percent(move.draws))}% · Black ${Math.round(
+      percent(move.black),
+    )}% · ${formatGames(games)} games at ${level}`;
+  }
+
+  return (
+    <div className="band-chart">
+      <div className="band-chart-head">
+        <span>
+          <strong>{choice.label}</strong> {name}
+        </span>
+        <span className="muted">across ratings</span>
+      </div>
+      <div className="band-cols">
+        {RATING_BANDS.map((b, i) => {
+          const share = shares[i];
+          return (
+            <span
+              key={b.rating}
+              className={`band-col ${b.rating === band ? "chosen" : ""} ${share === null ? "pending" : ""}`}
+              style={share === null ? undefined : { height: `${top > 0 ? Math.max(5, (share / top) * 100) : 5}%` }}
+              title={`≈ ${b.chessCom}: ${share === null ? "loading…" : formatShare(share)}`}
+            />
+          );
+        })}
+      </div>
+      <div className="band-axis">
+        {RATING_BANDS.map((b) => (
+          <span key={b.rating}>{b.short}</span>
+        ))}
+      </div>
+      <div className="results" title="White wins, draws, Black wins">
+        {move && games > 0 && (
+          <>
+            <span className="results-white" style={{ width: `${percent(move.white)}%` }} />
+            <span className="results-draw" style={{ width: `${percent(move.draws)}%` }} />
+            <span className="results-black" style={{ width: `${percent(move.black)}%` }} />
+          </>
+        )}
+      </div>
+      <p className="results-text">{results}</p>
+    </div>
   );
 }

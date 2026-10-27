@@ -11,15 +11,17 @@ import type {
   SessionResponse,
   StatusResponse,
 } from "../../shared/types";
+import type { ExplorerStats } from "../../shared/explorer";
 
 /** Fired on `window` when the server says the session is gone, so the app shows the sign-in screen. */
 export const SIGNED_OUT_EVENT = "chessbuddy:signed-out";
 
-async function request<T>(path: string, body?: unknown): Promise<T> {
+async function request<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(path, {
     method: body === undefined ? "GET" : "POST",
     headers: body === undefined ? undefined : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal,
   });
   const data = await response.json().catch(() => ({}));
   if (response.status === 401 && !path.startsWith("/api/auth/")) window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
@@ -36,6 +38,9 @@ export const api = {
   /** With nextGraded, the next move will be graded too, so the server searches the position between them once. */
   grade: (fen: string, uci: string, nextGraded = false) => request<MoveGrade>("/api/grade", { fen, uci, nextGraded }),
   evaluate: (fen: string) => request<PositionEval>("/api/eval", { fen }),
+  /** How often each move is played in the rating band; background requests wait behind the others. */
+  explorer: (fen: string, rating: number, background: boolean, signal?: AbortSignal) =>
+    request<ExplorerStats>("/api/explorer", { fen, rating, background }, signal),
   explain: (grade: MoveGrade, history: string[], model: string, perspective: Perspective, opening?: OpeningContext) =>
     request<Explanation>("/api/explain", { grade, history, model, perspective, opening }),
   /**

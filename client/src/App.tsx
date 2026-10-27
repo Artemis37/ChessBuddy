@@ -920,6 +920,7 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
               onPlay={explore}
               onHover={(uci) => setBookHover(uci ? { fen: displayFen, uci } : null)}
               onBackToLine={backToLine}
+              explorer={status?.explorer ?? null}
             />
           )}
           {(draft.mode === "review" || reviewing) && (

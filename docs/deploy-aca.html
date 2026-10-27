@@ -248,7 +248,8 @@
       <pre><code>node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"</code></pre>
       <p>Get the database connection string: in the portal open your <span class="ui">SQL database → Settings → Connection strings → ADO.NET (SQL authentication)</span>, copy it and put your password in place of <code>{your_password}</code>. It looks like:</p>
       <pre><code>Server=tcp:<var>&lt;server&gt;</var>.database.windows.net,1433;Initial Catalog=<var>&lt;database&gt;</var>;User ID=<var>&lt;user&gt;</var>;Password=<var>&lt;password&gt;</var>;Encrypt=True;</code></pre>
-      <div class="callout warn"><p>These four values (session secret, engine token, connection string, Anthropic key) only go into Container Apps secrets in step 6. Don't put them in an image or commit them.</p></div>
+      <p>Optional, for how often each move is played in <strong>Learn openings</strong>: a Lichess token. The Lichess opening explorer only answers signed-in accounts, so sign in to (or create) a free Lichess account and open <a href="https://lichess.org/account/oauth/token">lichess.org/account/oauth/token</a> → <span class="ui">New personal API access token</span>. Give it a description such as <code>ChessBuddy</code>, leave every scope unticked, create it and copy the token (it starts with <code>lip_</code>).</p>
+      <div class="callout warn"><p>These values (session secret, engine token, connection string, Anthropic key, Lichess token) only go into Container Apps secrets in step 6. Don't put them in an image or commit them.</p></div>
     </section>
 
     <section class="step" id="sql">
@@ -360,7 +361,7 @@ docker push <var>&lt;docker-user&gt;</var>/chessbuddy-web:manual-1</code></pre>
         <div class="mini">
           <h3>chessbuddy-web</h3>
           <ol>
-            <li><span class="ui">Settings → Secrets</span>: add <code>engine-token</code>, <code>session-secret</code>, <code>sql-connection-string</code> and <code>anthropic-api-key</code>.</li>
+            <li><span class="ui">Settings → Secrets</span>: add <code>engine-token</code>, <code>session-secret</code>, <code>sql-connection-string</code>, <code>anthropic-api-key</code> and, if you made one, <code>lichess-token</code>.</li>
             <li><span class="ui">Edit and deploy</span> → container → add these variables, each with Source <span class="ui">Reference a secret</span>. <span class="ui">Save → Create</span>.</li>
           </ol>
         </div>
@@ -371,6 +372,7 @@ docker push <var>&lt;docker-user&gt;</var>/chessbuddy-web:manual-1</code></pre>
         <tr><td><code>SESSION_SECRET</code></td><td><code>session-secret</code></td><td>Without it, every restart (each cold start) signs you out</td></tr>
         <tr><td><code>SQL_CONNECTION_STRING</code></td><td><code>sql-connection-string</code></td><td>Accounts other than the owner, in Azure SQL. Without it only the owner can sign in</td></tr>
         <tr><td><code>ANTHROPIC_API_KEY</code></td><td><code>anthropic-api-key</code></td><td>Explain and questions to the coach</td></tr>
+        <tr><td><code>LICHESS_TOKEN</code></td><td><code>lichess-token</code></td><td>Optional: Learn openings shows how often each move is played, from the Lichess opening explorer. Without it the percentages are hidden. The server asks Lichess itself, so the token never reaches the browser</td></tr>
         <tr><td><code>OWNER_PASSWORD_HASH</code></td><td><code>owner-password-hash</code></td><td>The owner's password, set in step 10. Until then the default password works</td></tr>
       </table></div>
     </section>

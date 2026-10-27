@@ -8,6 +8,7 @@ import { MemoryUserStore, ownerAccount, type UserStore } from "./auth/users";
 import { Bot } from "./bot/bot";
 import { Coach } from "./coach";
 import { McpStockfishEngine, type EngineTarget } from "./engine/mcpEngine";
+import { LichessExplorer } from "./explorer";
 import { EnginePool, gradingEngineCount, MAX_GRADING_ENGINES } from "./engine/pool";
 
 try {
@@ -37,6 +38,7 @@ const analyzer = new EnginePool(Array.from({ length: gradingEngines }, () => new
 const botEngine = new McpStockfishEngine(engineTarget);
 const bot = new Bot(botEngine);
 const coach = new Coach(process.env.COACH_MODEL ?? "claude-sonnet-5-5", COACH_EFFORT);
+const explorer = new LichessExplorer(process.env.LICHESS_TOKEN?.trim() || undefined);
 
 // The owner signs in against this hash, never the database; everyone else is looked up in Azure SQL.
 const owner = ownerAccount(process.env.OWNER_PASSWORD_HASH);
@@ -54,6 +56,7 @@ const { app, checkEngine, engineError } = createApp({
   analyzer,
   bot,
   coach,
+  explorer,
   auth,
   analysisDepth: ANALYSIS_DEPTH,
   gradingEngines,
@@ -69,6 +72,11 @@ app.listen(PORT, (error?: Error) => {
   }
   console.log(`ChessBuddy server on http://localhost:${PORT}`);
   console.log(coach.configured ? `Coach: ${coach.defaultModel} (default)` : "Coach: no ANTHROPIC_API_KEY yet (Explain is disabled)");
+  console.log(
+    explorer.configured
+      ? "Opening explorer: Lichess, with LICHESS_TOKEN"
+      : "Opening explorer: no LICHESS_TOKEN yet (Learn openings shows no move percentages)",
+  );
   console.log(
     process.env.SQL_CONNECTION_STRING
       ? "Accounts: Azure SQL (connects on the first sign-in of an account other than the owner)"

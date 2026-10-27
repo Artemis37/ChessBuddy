@@ -149,6 +149,8 @@ export interface StatusResponse {
   /** gradingEngines: how many moves the server grades at once (GRADING_ENGINES). */
   engine: { ready: boolean; error?: string; gradingEngines: number };
   coach: { ready: boolean; defaultModel: string; error?: string };
+  /** The Lichess opening explorer: ready once LICHESS_TOKEN is set. */
+  explorer: { ready: boolean; error?: string };
 }
 
 /** The signed-in account, from /api/auth/login and /api/auth/me. */
