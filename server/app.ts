@@ -36,6 +36,8 @@ export interface AppDeps {
   /** Sign-in. Every /api route except the /api/auth ones needs a signed-in session. */
   auth: Pick<Auth, "signIn" | "sessionUser">;
   analysisDepth: number;
+  /** How many grading searches `analyzer` runs at once (GRADING_ENGINES); reviews grade that many moves at a time. */
+  gradingEngines?: number;
   /** Built client to serve, if it exists. */
   distDir?: string;
   /** The commit the image was built from (APP_VERSION), reported by /api/health. */
@@ -90,7 +92,16 @@ function parse<S extends z.ZodTypeAny>(schema: S, body: unknown): z.output<S> {
   return result.data;
 }
 
-export function createApp({ analyzer: engine, bot, coach, auth, analysisDepth, distDir, version = "dev" }: AppDeps) {
+export function createApp({
+  analyzer: engine,
+  bot,
+  coach,
+  auth,
+  analysisDepth,
+  gradingEngines = 1,
+  distDir,
+  version = "dev",
+}: AppDeps) {
   // The evaluation bar and grading often ask about the same position, so analyses are cached.
   const analyzer = new CachedAnalyzer(engine);
   const coachModels = [...new Set<string>([coach.defaultModel, ...COACH_MODELS.map((m) => m.id)])];
@@ -169,7 +180,7 @@ export function createApp({ analyzer: engine, bot, coach, auth, analysisDepth, d
 
   app.get("/api/status", (_req, res) => {
     const status: StatusResponse = {
-      engine: { ready: !engineError(), error: engineError() },
+      engine: { ready: !engineError(), error: engineError(), gradingEngines },
       coach: {
         ready: coach.configured,
         defaultModel: defaultModelFor(userOf(res)),

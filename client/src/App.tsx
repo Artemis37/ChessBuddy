@@ -52,8 +52,6 @@ const BOT_MIN_THINK_MS = 400;
 /** Pause before a premove is played, so the opponent's move is seen first. */
 const PREMOVE_DELAY_MS = 120;
 const MODEL_KEY = "chessbuddy.coachModel";
-/** Moves graded at once while reviewing a game: the engine container runs two Stockfish processes. */
-const REVIEW_PARALLEL = 2;
 
 function toMove(uci: string) {
   return { from: uci.slice(0, 2) as Square, to: uci.slice(2, 4) as Square, promotion: uci[4] };
@@ -334,14 +332,17 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, []);
 
-  // Reviewing a game grades every move, REVIEW_PARALLEL at a time so the engine isn't swamped,
+  /** Moves graded at once while reviewing a game: as many as the server has grading engines (GRADING_ENGINES). */
+  const reviewParallel = status?.engine.gradingEngines ?? 1;
+
+  // Reviewing a game grades every move, reviewParallel at a time so the engine isn't swamped,
   // the one on the board first, then the rest of the move list and the game's moves it has
   // left. None start while the tab is hidden, and a failure stops the queue until Resume. Each
   // grade analyzes the position after its move the way the next grade needs, so the server's
   // cache answers that grade's first search.
   useEffect(() => {
     if (!reviewing || tabHidden || reviewStopped) return;
-    for (const index of nextToGrade(reviewQueue, shownCount - 1, REVIEW_PARALLEL - reviewInFlight.current)) {
+    for (const index of nextToGrade(reviewQueue, shownCount - 1, reviewParallel - reviewInFlight.current)) {
       const move = reviewQueue[index];
       const sequence = index < moves.length ? moves : line;
       const hasNext = sequence.findIndex((m) => m.id === move.id) < sequence.length - 1;
@@ -351,7 +352,7 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
         setReviewSettled((n) => n + 1);
       });
     }
-  }, [reviewing, tabHidden, reviewStopped, reviewQueue, moves, line, shownCount, grade, reviewSettled]);
+  }, [reviewing, tabHidden, reviewStopped, reviewQueue, moves, line, shownCount, grade, reviewSettled, reviewParallel]);
 
   // The bot replies whenever it is its turn.
   useEffect(() => {

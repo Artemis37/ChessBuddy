@@ -124,8 +124,13 @@ describe("GET /api/status", () => {
     const call = await start();
     expect(await call("GET", "/api/status")).toEqual({
       status: 200,
-      body: { engine: { ready: true }, coach: { ready: true, defaultModel: "claude-sonnet-5-5" } },
+      body: { engine: { ready: true, gradingEngines: 1 }, coach: { ready: true, defaultModel: "claude-sonnet-5-5" } },
     });
+  });
+
+  it("reports how many moves the server grades at once, so a review asks for that many", async () => {
+    const call = await start({ gradingEngines: 3 });
+    expect((await call("GET", "/api/status")).body.engine.gradingEngines).toBe(3);
   });
 
   it("tells the user to add a key when the coach is not configured", async () => {

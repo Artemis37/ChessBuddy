@@ -322,6 +322,7 @@ docker push <var>&lt;docker-user&gt;</var>/chessbuddy-web:manual-1</code></pre>
       </ol>
       <div class="callout">
         <p><strong>At least two engines:</strong> one replica already runs two engines side by side (<code>ENGINE_POOL_SIZE=2</code>, set in the image). With the scale rule, a third simultaneous request starts a second replica, so up to four engines run at once. For more engines per replica, add the environment variable <code>ENGINE_POOL_SIZE</code> (and give it more CPU); for more replicas, raise <span class="ui">Max replicas</span>. The gateway is stateless, so any replica can answer any request.</p>
+        <p>The web app grades one move at a time by default, so a game review keeps one engine busy and leaves the other for the bot. To review faster, set <code>GRADING_ENGINES</code> on the web app (step 5) to grade that many moves at once; more engines at once uses the free grant faster.</p>
       </div>
     </section>
 
@@ -337,6 +338,7 @@ docker push <var>&lt;docker-user&gt;</var>/chessbuddy-web:manual-1</code></pre>
             <tr><td><code>COACH_MODEL</code></td><td><code>claude-haiku-5-5</code> (cheapest) or <code>claude-sonnet-5-5</code></td></tr>
             <tr><td><code>COACH_EFFORT</code></td><td><code>low</code> or <code>medium</code></td></tr>
             <tr><td><code>ANALYSIS_DEPTH</code></td><td><code>16</code></td></tr>
+            <tr><td><code>GRADING_ENGINES</code></td><td>Optional, default <code>1</code>: how many moves are graded at once, for example while reviewing a game. Each grade uses one of the engine's processes; a replica runs 2, so more requests at once, the bot's move included, start a second engine replica (step 4).</td></tr>
           </table></div>
         </li>
         <li><strong>Ingress</strong>: Enabled · <span class="ui">Ingress traffic</span>: <strong>Accepting traffic from anywhere</strong> · HTTP · <span class="ui">Target port</span> <code>3001</code> · insecure connections off.</li>

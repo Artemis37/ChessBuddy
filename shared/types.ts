@@ -146,7 +146,8 @@ export interface BotMoveResponse {
 }
 
 export interface StatusResponse {
-  engine: { ready: boolean; error?: string };
+  /** gradingEngines: how many moves the server grades at once (GRADING_ENGINES). */
+  engine: { ready: boolean; error?: string; gradingEngines: number };
   coach: { ready: boolean; defaultModel: string; error?: string };
 }
 

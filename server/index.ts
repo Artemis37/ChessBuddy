@@ -8,6 +8,7 @@ import { MemoryUserStore, ownerAccount, type UserStore } from "./auth/users";
 import { Bot } from "./bot/bot";
 import { Coach } from "./coach";
 import { McpStockfishEngine, type EngineTarget } from "./engine/mcpEngine";
+import { EnginePool, gradingEngineCount, MAX_GRADING_ENGINES } from "./engine/pool";
 
 try {
   process.loadEnvFile(".env");
@@ -20,13 +21,19 @@ const ANALYSIS_DEPTH = Number(process.env.ANALYSIS_DEPTH ?? 16);
 const COACH_EFFORT = z.enum(["low", "medium", "high"]).catch("medium").parse(process.env.COACH_EFFORT);
 
 // mcp-stockfish answers one request at a time, so grading and the bot each get their own
-// connection. Locally that's a Docker container each; behind ENGINE_URL the engine container's
+// connections. Locally that's a Docker container each; behind ENGINE_URL the engine container's
 // gateway hands each request to one of its mcp-stockfish processes. Otherwise the bot's reply
-// waits behind the grade.
+// waits behind the grade. GRADING_ENGINES connections grade side by side (1 by default), and a
+// reviewed game is graded that many moves at a time.
 const engineTarget: EngineTarget = process.env.ENGINE_URL
   ? { url: process.env.ENGINE_URL, token: process.env.ENGINE_TOKEN || undefined }
   : { image: process.env.STOCKFISH_IMAGE ?? "chessbuddy/mcp-stockfish" };
-const analyzer = new McpStockfishEngine(engineTarget);
+let gradingEngines = gradingEngineCount(process.env.GRADING_ENGINES);
+if (gradingEngines === null) {
+  console.warn(`GRADING_ENGINES must be a whole number from 1 to ${MAX_GRADING_ENGINES}: using 1.`);
+  gradingEngines = 1;
+}
+const analyzer = new EnginePool(Array.from({ length: gradingEngines }, () => new McpStockfishEngine(engineTarget)));
 const botEngine = new McpStockfishEngine(engineTarget);
 const bot = new Bot(botEngine);
 const coach = new Coach(process.env.COACH_MODEL ?? "claude-sonnet-5-5", COACH_EFFORT);
@@ -49,6 +56,7 @@ const { app, checkEngine, engineError } = createApp({
   coach,
   auth,
   analysisDepth: ANALYSIS_DEPTH,
+  gradingEngines,
   distDir: path.resolve("dist"),
   version: process.env.APP_VERSION,
 });
@@ -71,7 +79,9 @@ app.listen(PORT, (error?: Error) => {
       ? `Owner ${owner.username}: password hash from OWNER_PASSWORD_HASH`
       : `Owner ${owner.username}: default password hash from the code (set OWNER_PASSWORD_HASH to change the password)`,
   );
-  console.log("url" in engineTarget ? `Engine: ${engineTarget.url}` : `Engine: Docker image ${engineTarget.image}`);
+  console.log(
+    `${"url" in engineTarget ? `Engine: ${engineTarget.url}` : `Engine: Docker image ${engineTarget.image}`}, ${gradingEngines} grading ${gradingEngines === 1 ? "engine" : "engines"} and 1 for the bot`,
+  );
   checkEngine().then(
     () => console.log("Engine: ready"),
     () => console.error(`Engine: ${engineError()}`),
