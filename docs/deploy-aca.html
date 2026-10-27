@@ -162,7 +162,8 @@
       <li><a href="#test">7. Sign in and test</a></li>
       <li><a href="#budget">8. Budget alert</a></li>
       <li><a href="#update">9. Deploy updates automatically</a></li>
-      <li><a href="#password">10. Change the password</a></li>
+      <li><a href="#password">10. Owner's password</a></li>
+      <li><a href="#accounts">11. Add accounts</a></li>
       <li><a href="#costs">Costs and limits</a></li>
       <li><a href="#trouble">Troubleshooting</a></li>
     </ol>
@@ -225,7 +226,7 @@
         <li><strong>chessbuddy-web</strong> is the <code>Dockerfile</code> in the repo root: Express API, the built React app and sign-in.</li>
         <li><strong>chessbuddy-engine</strong> is the <code>http</code> target of <code>docker/mcp-stockfish.Dockerfile</code>: the same mcp-stockfish engine you run locally, behind a small MCP-over-HTTP gateway. Each replica runs <code>ENGINE_POOL_SIZE</code> (2) engines, so a grade and the bot's move run at the same time; a third request at once starts a second replica.</li>
         <li>The engine's ingress is <em>limited to the environment</em>, so the internet can't reach it. A shared token protects it as well.</li>
-        <li>The web app only touches the database when someone signs in. Sessions are signed cookies, so the free-tier database can pause while you play.</li>
+        <li>The web app only touches the database when an account other than the owner signs in: the owner's password is checked against a hash the app already has. Sessions are signed cookies that also carry the account's VIP flag, so the free-tier database can pause while you play.</li>
       </ul>
     </section>
 
@@ -259,7 +260,7 @@
       </ol>
       <p>Container Apps on the Consumption plan have no fixed outbound IP, so this exception is how the web app gets through. It admits any Azure address, so keep a strong SQL password.</p>
       <p>To also sign in from <code>npm run dev</code> against this database, add your own IP under <span class="ui">Firewall rules</span> and put the connection string in your local <code>.env</code> as <code>SQL_CONNECTION_STRING</code>.</p>
-      <div class="callout"><p>No table to create by hand: on the first sign-in the app creates <code>chessbuddy.Users</code> and adds the built-in account <code>kviiilyn37_</code> if the table is empty.</p></div>
+      <div class="callout"><p>No table to create by hand: the owner account <code>kviiilyn37_</code> isn't stored in the database, and the app creates <code>chessbuddy.Users</code> (or adds its <code>IsVip</code> column to a table made before it existed) on the first sign-in that looks an account up. The script in step 11, which adds accounts, does the same first.</p></div>
     </section>
 
     <section class="step" id="images">
@@ -366,8 +367,9 @@ docker push <var>&lt;docker-user&gt;</var>/chessbuddy-web:manual-1</code></pre>
         <tr><th>Variable (web app)</th><th>Secret</th><th>Why</th></tr>
         <tr><td><code>ENGINE_TOKEN</code></td><td><code>engine-token</code></td><td>Must match the engine's token</td></tr>
         <tr><td><code>SESSION_SECRET</code></td><td><code>session-secret</code></td><td>Without it, every restart (each cold start) signs you out</td></tr>
-        <tr><td><code>SQL_CONNECTION_STRING</code></td><td><code>sql-connection-string</code></td><td>Accounts in Azure SQL. Without it only the built-in account exists, in memory</td></tr>
-        <tr><td><code>ANTHROPIC_API_KEY</code></td><td><code>anthropic-api-key</code></td><td>Explain and follow-up questions</td></tr>
+        <tr><td><code>SQL_CONNECTION_STRING</code></td><td><code>sql-connection-string</code></td><td>Accounts other than the owner, in Azure SQL. Without it only the owner can sign in</td></tr>
+        <tr><td><code>ANTHROPIC_API_KEY</code></td><td><code>anthropic-api-key</code></td><td>Explain and questions to the coach</td></tr>
+        <tr><td><code>OWNER_PASSWORD_HASH</code></td><td><code>owner-password-hash</code></td><td>The owner's password, set in step 10. Until then the default password works</td></tr>
       </table></div>
     </section>
 
@@ -375,10 +377,10 @@ docker push <var>&lt;docker-user&gt;</var>/chessbuddy-web:manual-1</code></pre>
       <h2><span class="num">7</span> Sign in and test</h2>
       <ol class="steps">
         <li>Open <span class="ui">chessbuddy-web → Overview → Application Url</span>. After a quiet spell the first load takes a few seconds while the container starts.</li>
-        <li>Sign in as <code>kviiilyn37_</code> with the default password. The first sign-in creates the accounts table; if the database was paused it can take up to a minute (the screen says so).</li>
+        <li>Sign in as <code>kviiilyn37_</code> with the default password, or your own once step 10 is done. The owner's sign-in doesn't touch the database, so it's quick even while the database is paused. Other accounts' first sign-in after a pause can take up to a minute (the screen says so).</li>
         <li>The top bar should show <span class="ui">Engine ready</span> and your username. Play a move: it gets graded and the bot answers.</li>
       </ol>
-      <p>If something is off, <span class="ui">Monitoring → Log stream</span> shows each container's output, and <span class="ui">Application → Revisions and replicas</span> shows whether a revision is Running or Failed. The web app logs <code>Accounts: Azure SQL</code> and <code>Engine: https://…/mcp</code> on startup.</p>
+      <p>If something is off, <span class="ui">Monitoring → Log stream</span> shows each container's output, and <span class="ui">Application → Revisions and replicas</span> shows whether a revision is Running or Failed. The web app logs <code>Accounts: Azure SQL</code>, where the owner's password hash comes from, and <code>Engine: https://…/mcp</code> on startup.</p>
     </section>
 
     <section class="step" id="budget">
@@ -419,12 +421,49 @@ docker push <var>&lt;docker-user&gt;</var>/chessbuddy-web:manual-1</code></pre>
     </section>
 
     <section class="step" id="password">
-      <h2><span class="num">10</span> Change the default password</h2>
-      <p>There's no sign-up or password screen yet, so change it in the database. Make a hash locally:</p>
-      <pre><code>npm run password:hash -- "<var>&lt;new password&gt;</var>"</code></pre>
-      <p>Then in the portal open the <span class="ui">SQL database → Query editor</span>, sign in, and run:</p>
-      <pre><code>UPDATE chessbuddy.Users SET PasswordHash = N'<var>&lt;hash from above&gt;</var>' WHERE Username = N'kviiilyn37_';</code></pre>
+      <h2><span class="num">10</span> Set the owner's password</h2>
+      <p>The owner account <code>kviiilyn37_</code> isn't in the database: the web app checks its password against a hash it already has, so the owner's sign-in never wakes the database. The default hash is in <code>server/auth/users.ts</code>, and the repo is public, so a weak default password could be cracked offline. Give the web app the hash of a strong password as a secret instead; it's never published.</p>
+      <ol class="steps">
+        <li>Make the hash locally:
+          <pre><code>npm run password:hash -- "<var>&lt;new password&gt;</var>"</code></pre>
+        </li>
+        <li>In <span class="ui">chessbuddy-web → Settings → Secrets → Add</span>: key <code>owner-password-hash</code>, type Container Apps secret, value the whole line the script printed (it starts with <code>scrypt$</code>).</li>
+        <li><span class="ui">Application → Containers → Edit and deploy</span>, select the container, <span class="ui">Environment variables → Add</span>: <code>OWNER_PASSWORD_HASH</code>, Source <span class="ui">Reference a secret</span>, <code>owner-password-hash</code>. <span class="ui">Save → Create</span>.</li>
+      </ol>
+      <p>The new revision logs <code>Owner kviiilyn37_: password hash from OWNER_PASSWORD_HASH</code>. If the value isn't a hash from the script, the revision refuses to start rather than fall back to the default password; its log stream says why, and the previous revision keeps serving. The deploy job in step 9 keeps the app's secrets and environment variables, so later deploys keep the password. To change it again, update the secret and restart the revision (<span class="ui">Revisions and replicas → Restart</span>).</p>
       <p>Sessions already signed in stay valid until they expire (7 days). To sign everyone out at once, change <code>session-secret</code> and deploy a new revision.</p>
+      <div class="callout warn"><p>Changing the owner's row in <code>chessbuddy.Users</code> has no effect: the server ignores any database row named <code>kviiilyn37_</code>. If an older version of the app created one, you can delete it.</p></div>
+    </section>
+
+    <section class="step" id="accounts">
+      <h2><span class="num">11</span> Add other accounts</h2>
+      <p>There's no sign-up: other accounts are rows in <code>chessbuddy.Users</code>. They aren't VIP, so they can use Haiku and Sonnet but not Opus, which only VIP accounts (the owner) may use.</p>
+      <ol class="steps">
+        <li>Make the account's password hash locally:
+          <pre><code>npm run password:hash -- "<var>&lt;their password&gt;</var>"</code></pre>
+        </li>
+        <li>Open <code>scripts/add-user.sql</code> from the repo (it's the script below) and put the username and that hash in the two values at its bottom.</li>
+        <li>In the portal open the <span class="ui">SQL database → Query editor</span>, sign in, paste the whole script and <span class="ui">Run</span>.</li>
+      </ol>
+      <pre><code>IF SCHEMA_ID(N'chessbuddy') IS NULL EXEC(N'CREATE SCHEMA chessbuddy');
+IF OBJECT_ID(N'chessbuddy.Users', N'U') IS NULL EXEC(N'CREATE TABLE chessbuddy.Users (
+  Id INT IDENTITY(1, 1) PRIMARY KEY,
+  Username NVARCHAR(64) NOT NULL UNIQUE,
+  PasswordHash NVARCHAR(255) NOT NULL,
+  IsVip BIT NOT NULL DEFAULT 0,
+  CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+)');
+IF COL_LENGTH(N'chessbuddy.Users', N'IsVip') IS NULL EXEC(N'ALTER TABLE chessbuddy.Users ADD IsVip BIT NOT NULL DEFAULT 0');
+
+EXEC sp_executesql
+  N'INSERT INTO chessbuddy.Users (Username, PasswordHash, IsVip) VALUES (@username, @passwordHash, 0)',
+  N'@username NVARCHAR(64), @passwordHash NVARCHAR(255)',
+  @username = N'<var>&lt;username&gt;</var>',
+  @passwordHash = N'<var>&lt;hash from npm run password:hash&gt;</var>';</code></pre>
+      <p>The first three statements create the schema and the table when they're missing, and add the <code>IsVip</code> column to a table created before it existed; on a database that's already set up they do nothing. The insert goes through <code>sp_executesql</code> so it compiles after the column exists, which lets the whole script run as one batch.</p>
+      <p>To change an account's password, or make it VIP, run one of these. Changes apply from the account's next sign-in:</p>
+      <pre><code>UPDATE chessbuddy.Users SET PasswordHash = N'<var>&lt;new hash&gt;</var>' WHERE Username = N'<var>&lt;username&gt;</var>';
+UPDATE chessbuddy.Users SET IsVip = 1 WHERE Username = N'<var>&lt;username&gt;</var>';</code></pre>
     </section>
 
     <section class="step" id="costs">
@@ -434,8 +473,8 @@ docker push <var>&lt;docker-user&gt;</var>/chessbuddy-web:manual-1</code></pre>
         <li>With the engine at 1 vCPU / 2 Gi and the web app at 0.25 / 0.5 Gi, that's roughly <strong>40 hours of play a month</strong> with one engine replica. A second engine replica uses it up faster. Past the grant, a rough estimate is about 15¢ an hour.</li>
         <li>Replicas stay up a few minutes after the last request before scaling to zero. The app only checks status while its tab is visible, so a tab left in the background doesn't keep the containers running.</li>
         <li>Keeping replicas always on (<span class="ui">Min replicas</span> above 0) goes past the free grant: two always-on engine replicas would be roughly $40 a month.</li>
-        <li><strong>Azure SQL free offer</strong>: 100,000 vCore-seconds a month. Only sign-in touches the database, and connections close after 30 seconds idle, so it can pause.</li>
-        <li><strong>Claude</strong>: only Explain and follow-up questions cost money. Haiku is the cheapest model.</li>
+        <li><strong>Azure SQL free offer</strong>: 100,000 vCore-seconds a month. Only the sign-in of an account other than the owner touches the database, and connections close after 30 seconds idle, so it can pause.</li>
+        <li><strong>Claude</strong>: only Explain and questions to the coach cost money. Haiku is the cheapest model; Opus, the dearest, is only for VIP accounts.</li>
       </ul>
     </section>
 
@@ -447,6 +486,8 @@ docker push <var>&lt;docker-user&gt;</var>/chessbuddy-web:manual-1</code></pre>
         <tr><td>"Engine unavailable" in the top bar</td><td><code>ENGINE_URL</code> must be the engine's internal <code>https://…</code> URL ending in <code>/mcp</code>. "Unauthorized" in the message means <code>ENGINE_TOKEN</code> differs between the apps. Check the engine revision is Running.</td></tr>
         <tr><td>Signed out after every cold start</td><td><code>SESSION_SECRET</code> isn't set on the web app.</td></tr>
         <tr><td>"Too many failed sign-ins"</td><td>Five wrong passwords from your address. Wait 15 minutes, or restart the web app's revision.</td></tr>
+        <tr><td>The web revision fails with "OWNER_PASSWORD_HASH must be a hash"</td><td>The <code>owner-password-hash</code> secret isn't the line <code>npm run password:hash</code> printed. Paste the whole line, starting <code>scrypt$</code>, without quotes (step 10).</td></tr>
+        <tr><td>"Opus 5.5 is only for VIP accounts"</td><td>The account isn't VIP: pick Haiku or Sonnet, or set its <code>IsVip</code> to 1 (step 11) and sign in again.</td></tr>
         <tr><td>Revision failed: image pull error</td><td>The tag doesn't exist (check the repository's <span class="ui">Tags</span> on Docker Hub), the registry credentials are missing or wrong so Docker Hub's anonymous pull limit applies, or the image was built for ARM.</td></tr>
         <tr><td>"The TargetPort 3001 does not match the listening port 8080" on <code>chessbuddy-web</code></td><td>The web app is running the engine image: only <code>chessbuddy-engine</code> listens on 8080. Set the image to <code><var>&lt;docker-user&gt;</var>/chessbuddy-web:sha-…</code> (step 5), and make sure <code>API_PORT</code> is <code>3001</code> or not set. The log stream should show <code>ChessBuddy server on http://localhost:3001</code>, not <code>Engine gateway on port 8080</code>.</td></tr>
         <tr><td>CI fails at "Check Docker Hub settings"</td><td>The <code>DOCKERHUB_USERNAME</code> variable or the <code>DOCKERHUB_TOKEN</code> secret is missing in the GitHub repo (step 3).</td></tr>

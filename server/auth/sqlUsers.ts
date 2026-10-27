@@ -1,21 +1,25 @@
 import sql from "mssql";
-import { DEFAULT_ACCOUNT, type UserRecord, type UserStore } from "./users";
+import type { UserRecord, UserStore } from "./users";
 
-// Separate batches: SQL Server compiles a whole batch first, so a table can't be used in the
-// batch that creates its schema.
-const SETUP = [
-  "IF SCHEMA_ID(N'chessbuddy') IS NULL EXEC(N'CREATE SCHEMA chessbuddy')",
-  `IF OBJECT_ID(N'chessbuddy.Users', N'U') IS NULL
-  CREATE TABLE chessbuddy.Users (
-    Id INT IDENTITY(1, 1) PRIMARY KEY,
-    Username NVARCHAR(64) NOT NULL UNIQUE,
-    PasswordHash NVARCHAR(255) NOT NULL,
-    CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
-  )`,
+/**
+ * Creates the accounts table if it's missing and adds columns added since. Each statement runs
+ * its DDL through EXEC, which is compiled only when it runs: SQL Server compiles a whole batch
+ * first, so otherwise a table couldn't be used in the batch that creates its schema or column.
+ * That lets scripts/add-user.sql run them all in one batch, as the portal's Query editor does.
+ */
+export const SETUP = [
+  "IF SCHEMA_ID(N'chessbuddy') IS NULL EXEC(N'CREATE SCHEMA chessbuddy');",
+  `IF OBJECT_ID(N'chessbuddy.Users', N'U') IS NULL EXEC(N'CREATE TABLE chessbuddy.Users (
+  Id INT IDENTITY(1, 1) PRIMARY KEY,
+  Username NVARCHAR(64) NOT NULL UNIQUE,
+  PasswordHash NVARCHAR(255) NOT NULL,
+  IsVip BIT NOT NULL DEFAULT 0,
+  CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+)');`,
+  // A table created before accounts had a VIP flag.
+  "IF COL_LENGTH(N'chessbuddy.Users', N'IsVip') IS NULL EXEC(N'ALTER TABLE chessbuddy.Users ADD IsVip BIT NOT NULL DEFAULT 0');",
 ];
-const SEED = `IF NOT EXISTS (SELECT 1 FROM chessbuddy.Users)
-  INSERT INTO chessbuddy.Users (Username, PasswordHash) VALUES (@username, @passwordHash)`;
-const FIND = `SELECT TOP (1) Username AS username, PasswordHash AS passwordHash
+export const FIND = `SELECT TOP (1) Username AS username, PasswordHash AS passwordHash, IsVip AS isVip
   FROM chessbuddy.Users WHERE Username = @username`;
 
 /**
@@ -59,8 +63,9 @@ export async function withRetry<T>(
 }
 
 /**
- * Accounts in Azure SQL (table `chessbuddy.Users`, created on first sign-in together with the
- * built-in account). The database is only touched when someone signs in: the pool keeps no idle
+ * Accounts in Azure SQL (table `chessbuddy.Users`, created on the first sign-in that looks one
+ * up; accounts are added with scripts/add-user.sql). The owner isn't stored here. The database
+ * is only touched when someone other than the owner signs in: the pool keeps no idle
  * connections, so the serverless free tier can pause.
  */
 export class SqlUserStore implements UserStore {
@@ -76,7 +81,8 @@ export class SqlUserStore implements UserStore {
       async () => {
         const pool = await this.connect();
         const result = await pool.request().input("username", sql.NVarChar(64), username).query<UserRecord>(FIND);
-        return result.recordset[0] ?? null;
+        const row = result.recordset[0];
+        return row ? { ...row, isVip: Boolean(row.isVip) } : null;
       },
       this.retry,
       (err) => {
@@ -115,11 +121,6 @@ export class SqlUserStore implements UserStore {
     await pool.connect();
     try {
       for (const statement of SETUP) await pool.request().batch(statement);
-      await pool
-        .request()
-        .input("username", sql.NVarChar(64), DEFAULT_ACCOUNT.username)
-        .input("passwordHash", sql.NVarChar(255), DEFAULT_ACCOUNT.passwordHash)
-        .query(SEED);
     } catch (err) {
       await pool.close().catch(() => {});
       throw err;

@@ -10,7 +10,15 @@ export interface Settings {
   rating: BotRating;
 }
 
-export interface PlayedMove {
+/** Questions to the coach about a move or a position, with the coach's answers and every edited version. */
+export interface Questions {
+  thread?: Branches | null;
+  /** The question waiting for an answer and where in the thread shown it goes, if any. */
+  asking?: { question: string; depth: number };
+  askError?: string;
+}
+
+export interface PlayedMove extends Questions {
   id: number;
   san: string;
   uci: string;
@@ -21,7 +29,8 @@ export interface PlayedMove {
   fenAfter: string;
   /**
    * Graded automatically: the player's own moves, every move when playing both sides or reviewing
-   * a game, or moves off the book when learning an opening. Others only when asked.
+   * a game, or moves off the book when learning an opening. Others only when asked. Questions
+   * (from Questions) can be asked about any move, before or after it is explained.
    */
   graded: boolean;
   /** Learning an opening: the move is in the opening book. */
@@ -32,11 +41,6 @@ export interface PlayedMove {
   explanation?: Explanation;
   explaining?: boolean;
   explainError?: string;
-  /** Follow-up questions about the explanation, with the coach's answers and every edited version. */
-  thread?: Branches | null;
-  /** The question waiting for an answer and where in the thread shown it goes, if any. */
-  asking?: { question: string; depth: number };
-  askError?: string;
 }
 
 export const CLASSIFICATION: Record<Classification, { label: string; symbol: string }> = {

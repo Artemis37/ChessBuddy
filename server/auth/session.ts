@@ -3,18 +3,28 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 export const SESSION_COOKIE = "chessbuddy_session";
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+/** The account behind a session, as it was when it signed in. */
+export interface SessionUser {
+  username: string;
+  /** VIP accounts may use every coach model, Opus included. */
+  vip: boolean;
+}
+
 /**
  * Sessions are signed cookies rather than database rows, so checking one never touches
- * Azure SQL and the free-tier database can stay paused while you play.
+ * Azure SQL and the free-tier database can stay paused while you play. The VIP flag travels in
+ * the signed payload too, so a change to an account applies from its next sign-in.
  * The token is `base64url(payload).base64url(HMAC-SHA256(payload))`.
  */
-export function signSession(username: string, secret: string, now = Date.now()): string {
-  const payload = Buffer.from(JSON.stringify({ u: username, exp: now + SESSION_TTL_MS })).toString("base64url");
+export function signSession(user: SessionUser, secret: string, now = Date.now()): string {
+  const payload = Buffer.from(JSON.stringify({ u: user.username, v: user.vip, exp: now + SESSION_TTL_MS })).toString(
+    "base64url",
+  );
   return `${payload}.${signature(payload, secret)}`;
 }
 
-/** The signed-in username, or null if the token is missing, tampered with or expired. */
-export function readSession(token: string | undefined, secret: string, now = Date.now()): string | null {
+/** The signed-in account, or null if the token is missing, tampered with or expired. */
+export function readSession(token: string | undefined, secret: string, now = Date.now()): SessionUser | null {
   if (!token) return null;
   const [payload, given, extra] = token.split(".");
   if (!payload || !given || extra !== undefined) return null;
@@ -24,9 +34,14 @@ export function readSession(token: string | undefined, secret: string, now = Dat
   if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return null;
 
   try {
-    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { u?: unknown; exp?: unknown };
+    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as {
+      u?: unknown;
+      v?: unknown;
+      exp?: unknown;
+    };
     if (typeof data.u !== "string" || typeof data.exp !== "number" || data.exp <= now) return null;
-    return data.u;
+    // Sessions signed before the flag existed have no `v`: not VIP until the next sign-in.
+    return { username: data.u, vip: data.v === true };
   } catch {
     return null;
   }

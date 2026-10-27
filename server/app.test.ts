@@ -5,7 +5,7 @@ import type { CoachReply, EngineLine, Explanation, MoveGrade } from "../shared/t
 import { createApp, type AppDeps } from "./app";
 import { Auth } from "./auth/auth";
 import { hashPassword } from "./auth/password";
-import { MemoryUserStore } from "./auth/users";
+import { MemoryUserStore, OWNER_USERNAME, ownerAccount } from "./auth/users";
 import { CoachError } from "./coach";
 
 const START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -64,14 +64,22 @@ function fakeCoach(overrides: Partial<AppDeps["coach"]> = {}): AppDeps["coach"] 
 }
 
 const LOGIN = { username: "player", password: "correct horse battery" };
-const testUsers = hashPassword(LOGIN.password).then(
-  (passwordHash) => new MemoryUserStore([{ username: LOGIN.username, passwordHash }]),
+const VIP_LOGIN = { username: "friend", password: "another long password" };
+const testUsers = Promise.all([hashPassword(LOGIN.password), hashPassword(VIP_LOGIN.password)]).then(
+  ([playerHash, friendHash]) =>
+    new MemoryUserStore([
+      { username: LOGIN.username, passwordHash: playerHash, isVip: false },
+      { username: VIP_LOGIN.username, passwordHash: friendHash, isVip: true },
+    ]),
 );
 
-let server: Server | undefined;
+let servers: Server[] = [];
 
-/** Starts the app. Calls keep the session cookie like a browser, signed in unless `signedIn` is false. */
-async function startServer(deps: Partial<AppDeps> = {}, { signedIn = true } = {}) {
+/**
+ * Starts the app. Calls keep the session cookie like a browser, signed in (as `login`, by
+ * default the non-VIP player) unless `signedIn` is false.
+ */
+async function startServer(deps: Partial<AppDeps> = {}, { signedIn = true, login = LOGIN } = {}) {
   const { app } = createApp({
     analyzer: fakeAnalyzer(),
     bot: fakeBot(),
@@ -80,8 +88,9 @@ async function startServer(deps: Partial<AppDeps> = {}, { signedIn = true } = {}
     analysisDepth: 10,
     ...deps,
   });
-  server = app.listen(0);
-  await new Promise((resolve) => server!.once("listening", resolve));
+  const server = app.listen(0);
+  servers.push(server);
+  await new Promise((resolve) => server.once("listening", resolve));
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   let cookie: string | undefined;
   const call = async (method: string, path: string, body?: unknown, raw?: string) => {
@@ -97,7 +106,7 @@ async function startServer(deps: Partial<AppDeps> = {}, { signedIn = true } = {}
     if (setCookie) cookie = setCookie.split(";")[0];
     return { status: res.status, body: await res.json() };
   };
-  if (signedIn) await call("POST", "/api/auth/login", LOGIN);
+  if (signedIn) await call("POST", "/api/auth/login", login);
   return { call, base };
 }
 
@@ -106,8 +115,8 @@ async function start(deps: Partial<AppDeps> = {}) {
 }
 
 afterEach(() => {
-  server?.close();
-  server = undefined;
+  for (const server of servers) server.close();
+  servers = [];
 });
 
 describe("GET /api/status", () => {
@@ -373,6 +382,71 @@ describe("POST /api/explain", () => {
   });
 });
 
+describe("VIP models", () => {
+  const EXPLAINED = { summary: "Good move.", steps: [], lesson: "Occupy the center early." };
+
+  function recordingCoach(seen: string[], defaultModel = "claude-sonnet-5-5") {
+    return fakeCoach({
+      defaultModel,
+      explain: async (_grade, _history, { model }) => {
+        seen.push(model);
+        return EXPLANATION;
+      },
+      ask: async (_subject, _history, _explanation, _thread, _question, { model }) => {
+        seen.push(model);
+        return REPLY;
+      },
+    });
+  }
+
+  it("refuses Opus to an account that isn't VIP, on /api/explain and /api/ask", async () => {
+    const seen: string[] = [];
+    const call = await start({ coach: recordingCoach(seen) });
+    const opus = { grade: {}, history: [], model: "claude-opus-5-5" };
+    expect(await call("POST", "/api/explain", opus)).toEqual({
+      status: 403,
+      body: { error: "Opus 5.5 is only for VIP accounts. Pick another model." },
+    });
+    expect((await call("POST", "/api/ask", { ...opus, explanation: EXPLAINED, question: "Why?" })).status).toBe(403);
+    // Haiku and Sonnet stay open to everyone.
+    expect((await call("POST", "/api/explain", { ...opus, model: "claude-haiku-5-5" })).status).toBe(200);
+    expect((await call("POST", "/api/ask", { ...opus, model: "claude-sonnet-5-5", question: "Why?" })).status).toBe(200);
+    expect(seen).toEqual(["claude-haiku-5-5", "claude-sonnet-5-5"]);
+  });
+
+  it("lets a VIP account use Opus", async () => {
+    const seen: string[] = [];
+    const { call } = await startServer({ coach: recordingCoach(seen) }, { login: VIP_LOGIN });
+    const opus = { grade: {}, history: [], model: "claude-opus-5-5" };
+    expect((await call("POST", "/api/explain", opus)).status).toBe(200);
+    expect((await call("POST", "/api/ask", { ...opus, question: "Why?" })).status).toBe(200);
+    expect(seen).toEqual(["claude-opus-5-5", "claude-opus-5-5"]);
+  });
+
+  it("gives an account that isn't VIP another default when COACH_MODEL is a VIP model", async () => {
+    const seen: string[] = [];
+    const coach = recordingCoach(seen, "claude-opus-5-5");
+    const call = await start({ coach });
+    expect((await call("GET", "/api/status")).body.coach.defaultModel).toBe("claude-sonnet-5-5");
+    expect((await call("POST", "/api/explain", { grade: {}, history: [] })).status).toBe(200);
+
+    const vip = (await startServer({ coach }, { login: VIP_LOGIN })).call;
+    expect((await vip("GET", "/api/status")).body.coach.defaultModel).toBe("claude-opus-5-5");
+    expect((await vip("POST", "/api/explain", { grade: {}, history: [] })).status).toBe(200);
+    expect(seen).toEqual(["claude-sonnet-5-5", "claude-opus-5-5"]);
+  });
+
+  it("checks the flag from the session cookie, without looking the account up again", async () => {
+    const users = await testUsers;
+    let lookups = 0;
+    const counting = { find: (name: string) => (lookups++, users.find(name)) };
+    const { call } = await startServer({ auth: new Auth(counting, "test-secret") }, { login: VIP_LOGIN });
+    expect(lookups).toBe(1);
+    expect((await call("POST", "/api/explain", { grade: {}, history: [], model: "claude-opus-5-5" })).status).toBe(200);
+    expect(lookups).toBe(1);
+  });
+});
+
 describe("POST /api/ask", () => {
   const EXPLAINED = { summary: "Good move.", steps: ["1. e4 takes the center."], lesson: "Occupy the center early." };
 
@@ -380,7 +454,7 @@ describe("POST /api/ask", () => {
     const seen: unknown[] = [];
     const call = await start({
       coach: fakeCoach({
-        ask: async (_grade, history, explanation, thread, question, { model }) => {
+        ask: async (_subject, history, explanation, thread, question, { model }) => {
           seen.push({ history, explanation, thread, question, model });
           return REPLY;
         },
@@ -407,11 +481,51 @@ describe("POST /api/ask", () => {
     expect(body.error).toBe("question: Type a question");
   });
 
-  it("needs the explanation being asked about", async () => {
+  it("asks about a move that hasn't been explained", async () => {
+    const seen: unknown[] = [];
+    const call = await start({
+      coach: fakeCoach({
+        ask: async (subject, _history, explanation) => {
+          seen.push({ subject, explanation });
+          return REPLY;
+        },
+      }),
+    });
+    const grade = { played: { uci: "e2e4", san: "e4" } };
+    expect(await call("POST", "/api/ask", { grade, history: [], question: "What now?" })).toEqual({ status: 200, body: REPLY });
+    expect(seen).toEqual([{ subject: { grade }, explanation: null }]);
+  });
+
+  it("asks about a position no move has led to, with the engine's three best lines there", async () => {
+    const seen: unknown[] = [];
+    const searches: unknown[] = [];
+    const call = await start({
+      analyzer: fakeAnalyzer({
+        analyze: async (fen, options) => {
+          searches.push({ fen, options });
+          return [{ score: { cp: 30 }, pv: ["e2e4"] }];
+        },
+      }),
+      coach: fakeCoach({
+        ask: async (subject) => {
+          seen.push(subject);
+          return REPLY;
+        },
+      }),
+    });
+    expect((await call("POST", "/api/ask", { fen: START, history: [], question: "What should I play?" })).status).toBe(200);
+    expect(seen).toEqual([{ fen: START, analysis: [{ score: { cp: 30 }, pv: ["e2e4"] }] }]);
+    expect(searches).toEqual([{ fen: START, options: { multipv: 3, depth: 10 } }]);
+  });
+
+  it("needs the move or the position being asked about", async () => {
     const call = await start();
-    const { status, body } = await call("POST", "/api/ask", { grade: {}, history: [], question: "Why?" });
+    const { status, body } = await call("POST", "/api/ask", { history: [], question: "Why?" });
     expect(status).toBe(400);
-    expect(body.error).toBe("explanation: Required");
+    expect(body.error).toBe("grade: Required");
+    expect((await call("POST", "/api/ask", { fen: MATED, history: [], question: "Why?" })).body).toEqual({
+      error: "The game is over in this position",
+    });
   });
 });
 
@@ -471,8 +585,8 @@ describe("sign-in", () => {
       status: 401,
       body: { error: "Wrong username or password" },
     });
-    expect(await call("POST", "/api/auth/login", LOGIN)).toEqual({ status: 200, body: { username: "player" } });
-    expect(await call("GET", "/api/auth/me")).toEqual({ status: 200, body: { username: "player" } });
+    expect(await call("POST", "/api/auth/login", LOGIN)).toEqual({ status: 200, body: { username: "player", vip: false } });
+    expect(await call("GET", "/api/auth/me")).toEqual({ status: 200, body: { username: "player", vip: false } });
     expect((await call("GET", "/api/status")).status).toBe(200);
 
     expect(await call("POST", "/api/auth/logout")).toEqual({ status: 200, body: { ok: true } });
@@ -484,8 +598,20 @@ describe("sign-in", () => {
     const { call } = await startServer({}, { signedIn: false });
     expect(await call("POST", "/api/auth/login", { ...LOGIN, username: " PLAYER " })).toEqual({
       status: 200,
-      body: { username: "player" },
+      body: { username: "player", vip: false },
     });
+  });
+
+  it("signs the owner in as VIP without asking the user store", async () => {
+    const store = await testUsers;
+    let lookups = 0;
+    const watched = { find: (name: string) => (lookups++, store.find(name)) };
+    const owner = ownerAccount(await hashPassword("the owner's test password"));
+    const { call } = await startServer({ auth: new Auth(watched, "test-secret", { owner }) }, { signedIn: false });
+    const login = { username: OWNER_USERNAME, password: "the owner's test password" };
+    expect(await call("POST", "/api/auth/login", login)).toEqual({ status: 200, body: { username: OWNER_USERNAME, vip: true } });
+    expect(await call("GET", "/api/auth/me")).toEqual({ status: 200, body: { username: OWNER_USERNAME, vip: true } });
+    expect(lookups).toBe(0);
   });
 
   it("rejects unknown usernames and empty fields", async () => {

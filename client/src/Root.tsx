@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { SessionResponse } from "../../shared/types";
 import { api, SIGNED_OUT_EVENT } from "./api";
 import { App } from "./App";
 import { LoginScreen } from "./components/LoginScreen";
@@ -6,12 +7,12 @@ import { LoginScreen } from "./components/LoginScreen";
 /** Shows the sign-in screen until there's a session, then the app. */
 export function Root() {
   /** undefined while checking the session cookie, null when signed out. */
-  const [user, setUser] = useState<string | null | undefined>(undefined);
+  const [user, setUser] = useState<SessionResponse | null | undefined>(undefined);
 
   useEffect(() => {
     let alive = true;
     api.me().then(
-      (session) => alive && setUser(session.username),
+      (session) => alive && setUser(session),
       () => alive && setUser(null),
     );
     const signedOut = () => setUser(null);

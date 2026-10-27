@@ -11,30 +11,34 @@ import {
 } from "../../shared/openings";
 import {
   COACH_MODELS,
+  isVipModel,
   type Color,
   type MoveGrade,
   type OpeningContext,
   type PositionEval,
+  type SessionResponse,
   type StatusResponse,
 } from "../../shared/types";
 import { api } from "./api";
 import { isMuted, listenForUnlock, playSound, setMuted } from "./board/audio";
-import { Board, type BoardArrow } from "./board/Board";
+import { Board, type BoardArrow, type BoardBadge } from "./board/Board";
 import { EvalBar } from "./board/EvalBar";
 import { capturedBy, capturedInPosition, materialBalance } from "./board/material";
 import type { Premove } from "./board/placement";
 import { PlayerBar } from "./board/PlayerBar";
 import { lastMoveSound, stepSound } from "./board/sound";
 import { MoveList } from "./components/MoveList";
-import { MovePanel } from "./components/MovePanel";
+import { MovePanel, START_INDEX } from "./components/MovePanel";
 import { OpeningsCard } from "./components/OpeningsCard";
 import { ReviewCard } from "./components/ReviewCard";
-import { SetupCard } from "./components/SetupCard";
-import { colorName, moveNumber, type PlayedMove, type Settings } from "./game";
+import { ModePicker, SetupCard } from "./components/SetupCard";
+import { colorName, moveNumber, type PlayedMove, type Questions, type Settings } from "./game";
 import { nextToGrade, scoreOf, type ReviewGame } from "./review";
 import { activePath, addExchange, showVersion } from "./thread";
 
 const START_FEN = new Chess().fen();
+/** The id the starting position's questions go by; moves are numbered from 1. */
+const START_ID = 0;
 const BEST_ARROW = "rgba(129, 182, 76, 0.95)";
 /** A book move under the pointer while learning an opening. */
 const BOOK_ARROW = "rgba(82, 155, 220, 0.85)";
@@ -104,8 +108,13 @@ function lastGradedIndex(moves: PlayedMove[]): number | null {
   return null;
 }
 
+function sansOf(moves: PlayedMove[]): string[] {
+  return moves.map((m) => m.san);
+}
+
 /** An explanation being played on the board. */
 interface Walkthrough {
+  /** The move explained or asked about, or START_ID for a question about the starting position. */
   moveId: number;
   /** Which answer of the move's thread, as shown, is playing; null for the explanation itself. */
   reply: number | null;
@@ -122,12 +131,20 @@ function loadModel(): string {
   }
 }
 
-export function App({ user, onSignOut }: { user: string; onSignOut: () => void }) {
+export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () => void }) {
   const [draft, setDraft] = useState<Settings>({ mode: "bot", myColor: "w", rating: 1000 });
   const [settings, setSettings] = useState<Settings>(draft);
   const [moves, setMoves] = useState<PlayedMove[]>([]);
+  /**
+   * Learning an opening or reviewing a game: the line's own moves (the opening's, or the game's),
+   * kept while the move list branches off them so Back to the line can bring them back, with
+   * their grades and explanations. Empty otherwise.
+   */
+  const [line, setLine] = useState<PlayedMove[]>([]);
   /** Number of moves shown on the board while stepping through the game; null follows the game. */
   const [viewPly, setViewPly] = useState<number | null>(null);
+  /** The move picked in the list; at the end of the game the panel otherwise shows the last graded move. */
+  const [pickedId, setPickedId] = useState<number | null>(null);
   const [premoves, setPremoves] = useState<Premove[]>([]);
   const [flipped, setFlipped] = useState(false);
   const [botThinking, setBotThinking] = useState(false);
@@ -137,6 +154,8 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
   const [evals, setEvals] = useState<Record<string, PositionEval>>({});
   const [book, setBook] = useState<OpeningBook | null>(null);
   const [walkthrough, setWalkthrough] = useState<Walkthrough | null>(null);
+  /** Questions about the starting position, which has no move to keep them. */
+  const [startQuestions, setStartQuestions] = useState<Questions>({});
   /** Opening lines and book moves, loaded the first time you learn openings. */
   const [library, setLibrary] = useState<OpeningLibrary | null>(null);
   /** The opening line being learned. */
@@ -144,7 +163,7 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
   /** The book move under the pointer, with the position it was listed for. */
   const [bookHover, setBookHover] = useState<{ fen: string; uci: string } | null>(null);
   const [soundOn, setSoundOn] = useState(() => !isMuted());
-  /** The game being reviewed; its moves come first in the move list. */
+  /** The game being reviewed; its moves are the line. */
   const [review, setReview] = useState<ReviewGame | null>(null);
   const [tabHidden, setTabHidden] = useState(() => document.hidden);
   /** Review grades waiting for the server, including ones for a game since replaced. */
@@ -169,18 +188,37 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
   const learning = settings.mode === "learn";
   const reviewed = settings.mode === "review" ? review : null;
   const reviewing = reviewed !== null;
-  /** How many moves come from the reviewed game; any after them were played on from its end. */
-  const imported = reviewed?.moves.length ?? 0;
-  // Reviewing a game, you can play on from its end with both colors.
-  const humanTurn = settings.mode === "both" || reviewing || turn === settings.myColor;
+  // Playing both sides you move every piece.
+  const humanTurn = settings.mode === "both" || turn === settings.myColor;
   /** The bot's quiet moves, or the opponent's in a reviewed game, sound different from yours, as on chess.com. */
   const botColor: Color | null = settings.mode === "bot" || reviewing ? other(settings.myColor) : null;
+  /**
+   * Where the move list leaves the line: the first move that differs. Reviewing a game, moves
+   * played on from its end leave it too.
+   */
+  const leftAt = learning
+    ? study
+      ? divergence(study.moves, sansOf(moves))
+      : null
+    : reviewing
+      ? (divergence(sansOf(line), sansOf(moves)) ?? (moves.length > line.length ? line.length : null))
+      : null;
+  /** Reviewing a game grades the move list's moves, then the game's moves the list has left. */
+  const reviewQueue = useMemo(() => {
+    if (!reviewing) return [];
+    const listed = new Set(moves.map((m) => m.id));
+    return [...moves, ...line.filter((m) => !listed.has(m.id))];
+  }, [reviewing, moves, line]);
   /** A move of the reviewed game couldn't be graded, so grading the rest waits for Resume. */
-  const reviewStopped = reviewing && moves.some((m) => m.gradeError);
+  const reviewStopped = reviewQueue.some((m) => m.gradeError);
+  const canUseModel = (id: string) => user.vip || !isVipModel(id);
+  const defaultModel = status?.coach.defaultModel ?? COACH_MODELS[0].id;
   const coachModel =
-    chosenModel && COACH_MODELS.some((m) => m.id === chosenModel)
+    chosenModel && COACH_MODELS.some((m) => m.id === chosenModel) && canUseModel(chosenModel)
       ? chosenModel
-      : (status?.coach.defaultModel ?? COACH_MODELS[0].id);
+      : canUseModel(defaultModel)
+        ? defaultModel
+        : COACH_MODELS.find((m) => !m.vip)!.id;
 
   useEffect(() => {
     let alive = true;
@@ -219,9 +257,26 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
   }, [draft.mode, library]);
   const openingLines = useMemo(() => (library ? readLines(library.lines) : null), [library]);
 
-  const updateMove = useCallback((id: number, patch: Partial<PlayedMove>) => {
-    setMoves((list) => list.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+  /** Changes a move wherever it is: in the move list, and in the line it may belong to. */
+  const editMove = useCallback((id: number, change: (move: PlayedMove) => PlayedMove) => {
+    const apply = (list: PlayedMove[]) => (list.some((m) => m.id === id) ? list.map((m) => (m.id === id ? change(m) : m)) : list);
+    setMoves(apply);
+    setLine(apply);
   }, []);
+
+  const updateMove = useCallback(
+    (id: number, patch: Partial<PlayedMove>) => editMove(id, (m) => ({ ...m, ...patch })),
+    [editMove],
+  );
+
+  /** Changes the questions of a move, or of the starting position (START_ID). */
+  const editQuestions = useCallback(
+    (id: number, change: (questions: Questions) => Questions) => {
+      if (id === START_ID) setStartQuestions(change);
+      else editMove(id, (m) => ({ ...m, ...change(m) }));
+    },
+    [editMove],
+  );
 
   /**
    * Grades a move; resolves to null if the engine fails, which the move then shows. With
@@ -262,16 +317,15 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
         fenBefore: fen,
         fenAfter: board.fen(),
         // Playing both sides you move every piece, so every move is graded.
-        graded: settings.mode === "both" || reviewing || made.color === settings.myColor,
+        graded: settings.mode === "both" || made.color === settings.myColor,
       };
       setMoves((list) => [...list, move]);
       playSound(lastMoveSound([...moves.map((m) => m.uci), move.uci], botColor));
-      // Reviewing a game, the grading queue below takes it, keeping to its limit. Playing both
-      // sides, the next move will be graded too.
-      if (move.graded && !reviewing) grade(move, settings.mode === "both");
+      // Playing both sides, the next move will be graded too.
+      if (move.graded) grade(move, settings.mode === "both");
       return true;
     },
-    [fen, moves, settings.mode, settings.myColor, reviewing, botColor, grade],
+    [fen, moves, settings.mode, settings.myColor, botColor, grade],
   );
 
   useEffect(() => {
@@ -281,19 +335,23 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
   }, []);
 
   // Reviewing a game grades every move, REVIEW_PARALLEL at a time so the engine isn't swamped,
-  // the one on the board first. None start while the tab is hidden, and a failure stops the queue
-  // until Resume. Each grade analyzes the position after its move the way the next grade needs,
-  // so the server's cache answers that grade's first search.
+  // the one on the board first, then the rest of the move list and the game's moves it has
+  // left. None start while the tab is hidden, and a failure stops the queue until Resume. Each
+  // grade analyzes the position after its move the way the next grade needs, so the server's
+  // cache answers that grade's first search.
   useEffect(() => {
     if (!reviewing || tabHidden || reviewStopped) return;
-    for (const index of nextToGrade(moves, shownCount - 1, REVIEW_PARALLEL - reviewInFlight.current)) {
+    for (const index of nextToGrade(reviewQueue, shownCount - 1, REVIEW_PARALLEL - reviewInFlight.current)) {
+      const move = reviewQueue[index];
+      const sequence = index < moves.length ? moves : line;
+      const hasNext = sequence.findIndex((m) => m.id === move.id) < sequence.length - 1;
       reviewInFlight.current++;
-      grade(moves[index], index < moves.length - 1).finally(() => {
+      grade(move, hasNext).finally(() => {
         reviewInFlight.current--;
         setReviewSettled((n) => n + 1);
       });
     }
-  }, [reviewing, tabHidden, reviewStopped, moves, shownCount, grade, reviewSettled]);
+  }, [reviewing, tabHidden, reviewStopped, reviewQueue, moves, line, shownCount, grade, reviewSettled]);
 
   // The bot replies whenever it is its turn.
   useEffect(() => {
@@ -335,12 +393,13 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
 
   const walkMoveIndex = walkthrough ? moves.findIndex((m) => m.id === walkthrough.moveId) : -1;
   const walkMove = walkMoveIndex >= 0 ? moves[walkMoveIndex] : undefined;
+  const walkQuestions: Questions | undefined = walkthrough?.moveId === START_ID ? startQuestions : walkMove;
   const walkSteps =
-    !walkthrough || !walkMove
+    !walkthrough || !walkQuestions
       ? []
       : walkthrough.reply === null
-        ? (walkMove.explanation?.steps ?? [])
-        : (activePath(walkMove.thread)[walkthrough.reply]?.exchange.reply.steps ?? []);
+        ? (walkMove?.explanation?.steps ?? [])
+        : (activePath(walkQuestions.thread)[walkthrough.reply]?.exchange.reply.steps ?? []);
   const walkStep = walkthrough ? walkSteps[walkthrough.step] : undefined;
 
   // Plays the current step's moves one at a time, each with its sound.
@@ -363,40 +422,48 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
     setPremoves([]);
   }, []);
 
+  /**
+   * Takes back the last `count` moves. Learning an opening or reviewing a game, when what's left
+   * is on the line, the line's moves come back after it, and the board shows where you were.
+   */
   const rewind = (count: number) => {
     gameToken.current++;
-    setMoves((list) => list.slice(0, list.length - count));
-    setViewPly(null);
+    const kept = moves.slice(0, moves.length - count);
+    const backOnLine = (learning || reviewing) && kept.length < line.length && divergence(sansOf(line), sansOf(kept)) === null;
+    setMoves(backOnLine ? [...kept, ...line.slice(kept.length)] : kept);
+    setViewPly(backOnLine ? kept.length : null);
     setPremoves([]);
     setBotError(null);
     setWalkthrough(null);
+  };
+
+  /** Starts over with the given moves and line, from their first position when `atStart`. */
+  const restart = (list: PlayedMove[], atStart: boolean) => {
+    gameToken.current++;
+    setMoves(list);
+    setLine(list);
+    setViewPly(atStart ? 0 : null);
+    setPickedId(null);
+    setPremoves([]);
+    setFlipped(false);
+    setBotError(null);
+    setWalkthrough(null);
+    setStartQuestions({});
   };
 
   const newGame = () => {
-    gameToken.current++;
     setSettings(draft);
-    setMoves([]);
-    setViewPly(null);
-    setPremoves([]);
-    setFlipped(false);
-    setBotError(null);
-    setWalkthrough(null);
     setStudy(null);
     setReview(null);
+    restart([], false);
   };
 
   /** Starts learning an opening line from its first position, with its moves ready to step through. */
-  const startStudy = (line: OpeningLine) => {
-    gameToken.current++;
+  const startStudy = (studied: OpeningLine) => {
     setSettings({ ...draft, mode: "learn" });
-    setStudy(line);
+    setStudy(studied);
     setReview(null);
-    setMoves(lineMoves(line.moves, nextId));
-    setViewPly(0);
-    setPremoves([]);
-    setFlipped(false);
-    setBotError(null);
-    setWalkthrough(null);
+    restart(lineMoves(studied.moves, nextId), true);
   };
 
   /**
@@ -404,23 +471,17 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
    * picked) at the bottom. Its moves are graded from there.
    */
   const startReview = (loaded: ReviewGame, myColor: Color | null) => {
-    gameToken.current++;
     const next: Settings = { ...draft, mode: "review", myColor: myColor ?? draft.myColor };
     setDraft(next);
     setSettings(next);
     setReview(loaded);
     setStudy(null);
-    setMoves(lineMoves(loaded.moves.map((m) => m.san), nextId, "graded"));
-    setViewPly(0);
-    setPremoves([]);
-    setFlipped(false);
-    setBotError(null);
-    setWalkthrough(null);
+    restart(lineMoves(loaded.moves.map((m) => m.san), nextId, "graded"), true);
   };
 
   /** Clears the failures that stopped grading the reviewed game, so the queue tries those moves again. */
   const resumeReview = () => {
-    setMoves((list) => list.map((m) => (m.gradeError ? { ...m, gradeError: undefined } : m)));
+    for (const m of reviewQueue) if (m.gradeError) updateMove(m.id, { gradeError: undefined });
   };
 
   const changeDraft = (next: Settings) => {
@@ -433,9 +494,13 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
   const retry = (index: number) => rewind(moves.length - index);
 
   // In bot mode, undo takes back the bot's reply together with your move, so it is your turn again.
-  // A reviewed game's own moves stay; only moves played on from its end can be taken back.
+  // Reviewing a game, only moves played off the game can be taken back.
   const canUndo =
-    settings.mode === "bot" ? moves.some((m) => m.color === settings.myColor) : moves.length > imported;
+    settings.mode === "bot"
+      ? moves.some((m) => m.color === settings.myColor)
+      : reviewing
+        ? leftAt !== null && moves.length > leftAt
+        : moves.length > 0;
   const undo = () => {
     if (!canUndo) return;
     const last = moves[moves.length - 1];
@@ -448,6 +513,7 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
       const clamped = Math.max(0, Math.min(moves.length, ply));
       playSound(stepSound(moves.map((m) => m.uci), shownCount, clamped, botColor));
       setViewPly(clamped >= moves.length ? null : clamped);
+      setPickedId(null);
       if (clamped < moves.length) setPremoves([]);
       setWalkthrough(null);
     },
@@ -499,10 +565,10 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
   // Book moves aren't graded until they are explained, so explaining grades them first.
   const explain = (index: number) => {
     const move = moves[index];
-    if (!move || move.explaining || move.grading) return;
+    if (!move || move.explaining || move.grading || move.asking) return;
     updateMove(move.id, { explaining: true, explainError: undefined });
     const perspective = move.color === settings.myColor ? "mine" : "opponent";
-    const history = moves.slice(0, index).map((m) => m.san);
+    const history = sansOf(moves.slice(0, index));
     const opening = openingContext(index);
     (move.grade ? Promise.resolve(move.grade) : grade(move))
       .then((g) => {
@@ -511,7 +577,7 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
       })
       .then(
         (explanation) => {
-          // Earlier questions were about the old explanation.
+          // Earlier questions were about the move without this explanation, or about an old one.
           updateMove(move.id, { explanation, explaining: false, thread: null, askError: undefined });
           if (explanation.steps.length > 0) showStep(move.id, 0);
         },
@@ -519,57 +585,84 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
       );
   };
 
-  /** Stops playing the move's answers from `depth` on, which are about to be hidden or replaced. */
-  const stopAnswersFrom = (moveId: number, depth: number) => {
-    setWalkthrough((w) => (w && w.moveId === moveId && w.reply !== null && w.reply >= depth ? null : w));
+  /** Stops playing the answers from `depth` on, which are about to be hidden or replaced. */
+  const stopAnswersFrom = (id: number, depth: number) => {
+    setWalkthrough((w) => (w && w.moveId === id && w.reply !== null && w.reply >= depth ? null : w));
   };
 
   /**
-   * Asks a question about the explanation. With `depth`, it replaces the question there, the way
-   * an edit does on claude.ai: the answer becomes a new version of that question, and the old
-   * version keeps the questions that followed it. The coach sees only the questions before it.
+   * Asks the coach about a move and the position after it (START_INDEX: the starting position),
+   * whether or not the move was explained; a move not graded yet is graded first. With `depth`,
+   * it replaces the question there, the way an edit does on claude.ai: the answer becomes a new
+   * version of that question, and the old version keeps the questions that followed it. The
+   * coach sees only the questions before it.
    */
   const ask = (index: number, question: string, depth?: number) => {
-    const move = moves[index];
-    if (!move?.grade || !move.explanation || move.asking || move.explaining) return;
-    const shown = activePath(move.thread);
+    const move = index === START_INDEX ? undefined : moves[index];
+    const subject: Questions | undefined = index === START_INDEX ? startQuestions : move;
+    if (!subject || subject.asking || move?.explaining || move?.grading) return;
+    const id = move?.id ?? START_ID;
+    const shown = activePath(subject.thread);
     const at = Math.min(depth ?? shown.length, shown.length);
-    updateMove(move.id, { asking: { question, depth: at }, askError: undefined });
-    stopAnswersFrom(move.id, at);
-    const perspective = move.color === settings.myColor ? "mine" : "opponent";
-    const explanation = move.explanation;
-    api
-      .ask(
-        move.grade,
-        moves.slice(0, index).map((m) => m.san),
-        coachModel,
-        perspective,
-        { summary: explanation.summary, steps: explanation.steps.map((s) => s.caption), lesson: explanation.lesson },
-        shown
-          .slice(0, at)
-          .map(({ exchange: e }) => ({ question: e.question, answer: e.reply.answer, steps: e.reply.steps.map((s) => s.caption) })),
-        question,
-        openingContext(index),
-      )
-      .then(
-        (reply) => {
-          setMoves((list) =>
-            list.map((m) =>
-              m.id === move.id ? { ...m, asking: undefined, thread: addExchange(m.thread, at, { question, reply }) } : m,
-            ),
-          );
-          if (reply.steps.length > 0) showStep(move.id, 0, at);
-        },
-        (err: Error) => updateMove(move.id, { asking: undefined, askError: err.message }),
-      );
+    editQuestions(id, (q) => ({ ...q, asking: { question, depth: at }, askError: undefined }));
+    stopAnswersFrom(id, at);
+    const thread = shown
+      .slice(0, at)
+      .map(({ exchange: e }) => ({ question: e.question, answer: e.reply.answer, steps: e.reply.steps.map((s) => s.caption) }));
+    const asked = move
+      ? (move.grade ? Promise.resolve(move.grade) : grade(move)).then((g) => {
+          if (!g) throw new Error("The move couldn't be analyzed.");
+          const explanation = move.explanation;
+          return api.ask({
+            grade: g,
+            history: sansOf(moves.slice(0, index)),
+            model: coachModel,
+            perspective: move.color === settings.myColor ? "mine" : "opponent",
+            explanation: explanation && {
+              summary: explanation.summary,
+              steps: explanation.steps.map((s) => s.caption),
+              lesson: explanation.lesson,
+            },
+            thread,
+            question,
+            opening: openingContext(index),
+          });
+        })
+      : api.ask({
+          fen: START_FEN,
+          history: [],
+          model: coachModel,
+          // White moves first.
+          perspective: settings.myColor === "w" ? "mine" : "opponent",
+          thread,
+          question,
+          opening:
+            learning && study && library
+              ? {
+                  studying: study.name,
+                  reached: null,
+                  bookMove: false,
+                  bookMoves: library.next[positionKey(START_FEN)] ?? [],
+                  line: study.moves,
+                }
+              : undefined,
+        });
+    asked.then(
+      (reply) => {
+        editQuestions(id, (q) => ({ ...q, asking: undefined, thread: addExchange(q.thread, at, { question, reply }) }));
+        if (reply.steps.length > 0) showStep(id, 0, at);
+      },
+      (err: Error) => editQuestions(id, (q) => ({ ...q, asking: undefined, askError: err.message })),
+    );
   };
 
-  /** Shows another version of a question in a move's thread, with the questions that followed it. */
+  /** Shows another version of a question in a move's thread (or the starting position's), with the questions that followed it. */
   const showQuestionVersion = (index: number, depth: number, version: number) => {
-    const move = moves[index];
-    if (!move?.thread || move.asking) return;
-    updateMove(move.id, { thread: showVersion(move.thread, depth, version), askError: undefined });
-    stopAnswersFrom(move.id, depth);
+    const subject: Questions | undefined = index === START_INDEX ? startQuestions : moves[index];
+    const id = index === START_INDEX ? START_ID : moves[index]?.id;
+    if (!subject?.thread || subject.asking || id === undefined) return;
+    editQuestions(id, (q) => ({ ...q, thread: q.thread && showVersion(q.thread, depth, version), askError: undefined }));
+    stopAnswersFrom(id, depth);
   };
 
   const chooseModel = (id: string) => {
@@ -590,13 +683,26 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
 
   const displayFen = shownCount === 0 ? START_FEN : moves[shownCount - 1].fenAfter;
   const shownMove = shownCount > 0 ? moves[shownCount - 1] : null;
-  // Learning an opening, the panel follows the board even through ungraded book moves.
-  const panelIndex = learning ? (shownCount > 0 ? shownCount - 1 : null) : live ? lastGradedIndex(moves) : shownCount - 1;
+  /** Learning an opening or reviewing a game, the panel follows the board even through ungraded moves. */
+  const followsBoard = learning || reviewing;
+  const pickedIndex = pickedId === null ? -1 : moves.findIndex((m) => m.id === pickedId);
+  const panelIndex: number | null = followsBoard
+    ? shownCount > 0
+      ? shownCount - 1
+      : null
+    : !live
+      ? shownCount > 0
+        ? shownCount - 1
+        : null
+      : pickedIndex >= 0
+        ? pickedIndex
+        : (lastGradedIndex(moves) ?? (moves.length > 0 ? moves.length - 1 : null));
+  const panelMove = panelIndex === null ? undefined : moves[panelIndex];
 
   /**
-   * Learning an opening, you move from whatever position the board shows: the next move in the
-   * list just steps forward, and any other move replaces the moves after this point. Moves off
-   * the book are graded.
+   * Learning an opening or reviewing a game, you move from whatever position the board shows:
+   * the next move in the list just steps forward, and any other move replaces the moves after
+   * this point. Moves off the book are graded; reviewing a game, the grading queue takes them.
    */
   const explore = (uci: string): boolean => {
     if (moves[shownCount]?.uci === uci) {
@@ -610,7 +716,17 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
     } catch {
       return false;
     }
-    const inBook = Boolean(library?.next[positionKey(displayFen)]?.includes(made.san));
+    const prefix = moves.slice(0, shownCount);
+    // Playing the line's own move where the list left it goes back to the line, moves after it included.
+    if (line[shownCount]?.uci === made.lan && divergence(sansOf(line), sansOf(prefix)) === null) {
+      setMoves([...prefix, ...line.slice(shownCount)]);
+      setViewPly(shownCount + 1);
+      setPickedId(null);
+      setWalkthrough(null);
+      playSound(lastMoveSound([...prefix.map((m) => m.uci), made.lan], reviewing ? botColor : undefined));
+      return true;
+    }
+    const inBook = learning && Boolean(library?.next[positionKey(displayFen)]?.includes(made.san));
     const move: PlayedMove = {
       id: nextId.current++,
       san: made.san,
@@ -622,33 +738,34 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
       graded: !inBook,
       book: inBook,
     };
-    setMoves([...moves.slice(0, shownCount), move]);
+    setMoves([...prefix, move]);
     setViewPly(null);
+    setPickedId(null);
     setWalkthrough(null);
-    playSound(lastMoveSound([...moves.slice(0, shownCount).map((m) => m.uci), move.uci]));
-    if (move.graded) grade(move);
+    playSound(lastMoveSound([...prefix.map((m) => m.uci), move.uci], reviewing ? botColor : undefined));
+    if (move.graded && !reviewing) grade(move);
     return true;
   };
 
   /** Puts the line's moves back where you left it, keeping the moves before that, and shows that position. */
-  const leftLineAt = study ? divergence(study.moves, moves.map((m) => m.san)) : null;
   const backToLine = () => {
-    if (!study || leftLineAt === null) return;
-    setMoves([...moves.slice(0, leftLineAt), ...lineMoves(study.moves, nextId).slice(leftLineAt)]);
-    setViewPly(leftLineAt);
+    if (leftAt === null) return;
+    setMoves([...moves.slice(0, leftAt), ...line.slice(leftAt)]);
+    setViewPly(leftAt);
+    setPickedId(null);
     setWalkthrough(null);
   };
 
   // Evaluation bar: reuse grades where possible, otherwise ask the engine once per position.
   const gradeEvals = useMemo(() => {
     const map = new Map<string, PositionEval>();
-    for (const m of moves) {
+    for (const m of [...moves, ...line]) {
       if (!m.grade) continue;
       map.set(m.grade.fenBefore, m.grade.positionBefore);
       map.set(m.grade.fenAfter, m.grade.positionAfter);
     }
     return map;
-  }, [moves]);
+  }, [moves, line]);
   const evaluation = gradeEvals.get(displayFen) ?? evals[displayFen] ?? null;
   // Reviewing a game, a move waiting in the grading queue will bring its positions' evaluations.
   const gradeComing = moves.some(
@@ -700,9 +817,14 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
     arrows.push({ from: bestMove.from, to: bestMove.to, color: BEST_ARROW });
   }
   const marks = walkStep && walkView?.done ? walkStep.marks : [];
+  // Learning an opening or reviewing a game, the move's grade icon sits on its square, as in
+  // chess.com's review: the same icons as the move list.
+  const badgeKind = followsBoard && !walkView && shownMove ? (shownMove.grade?.classification ?? (shownMove.book ? "book" : null)) : null;
+  const badge: BoardBadge | null = shownMove && badgeKind ? { square: toMove(shownMove.uci).to, kind: badgeKind } : null;
 
-  // Learning an opening, the side to move in the position shown may move, wherever that is in the list.
-  const movable: Color | null = learning
+  // Learning an opening or reviewing a game, the side to move in the position shown may move,
+  // wherever that is in the list.
+  const movable: Color | null = followsBoard
     ? walkView
       ? null
       : (displayFen.split(" ")[1] as Color)
@@ -713,8 +835,9 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
     live && !walkView && !result && settings.mode === "bot" && turn !== settings.myColor ? settings.myColor : null;
   const botLabel = settings.rating === "max" ? "Maximum" : `${settings.rating}`;
   /** At the end of a reviewed game: how it ended, such as a resignation the board can't show. */
-  const atReviewEnd = reviewed !== null && moves.length === imported;
+  const atReviewEnd = reviewed !== null && leftAt === null;
   const gameEnd = atReviewEnd && reviewed.termination ? sentence(reviewed.termination) : null;
+  const endText = live ? (gameEnd ?? result) : null;
 
   const reviewedPlayer = (color: Color) => (reviewed ? reviewed[color === "w" ? "white" : "black"] : null);
   const playerName = (color: Color) =>
@@ -746,6 +869,20 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
     );
   };
 
+  const panelId = panelIndex === null ? START_ID : panelMove?.id;
+  /** The move can be taken back to try another: off the book, off the reviewed game, or yours. */
+  const retryable =
+    panelMove !== undefined &&
+    panelIndex !== null &&
+    (learning
+      ? !panelMove.book
+      : reviewing
+        ? leftAt !== null && panelIndex >= leftAt
+        : panelMove.color === settings.myColor);
+  const lastMove = moves[moves.length - 1];
+  /** Playing on, the panel may show your graded move while the board has moved on to the reply. */
+  const boardAhead = !followsBoard && live && lastMove && panelIndex !== moves.length - 1 ? moves.length - 1 : null;
+
   return (
     <div className="app">
       <header className="topbar">
@@ -755,29 +892,96 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
         <div className="topbar-right">
           <StatusPills status={status} />
           <div className="account">
-            <span title="Signed in">{user}</span>
+            <span title="Signed in">{user.username}</span>
+            {user.vip && (
+              <span className="vip" title="VIP account: every coach model, Opus included">
+                VIP
+              </span>
+            )}
             <button onClick={onSignOut}>Sign out</button>
           </div>
         </div>
       </header>
 
       <main className="layout">
+        <aside className="left-col" aria-label="Game details and the coach">
+          <SetupCard draft={draft} onChange={changeDraft} onNewGame={newGame} />
+          {(draft.mode === "learn" || learning) && (
+            <OpeningsCard
+              lines={openingLines}
+              next={library?.next ?? NO_BOOK_MOVES}
+              book={book}
+              study={learning ? study : null}
+              moves={moves}
+              shown={shownCount}
+              fen={displayFen}
+              onPick={startStudy}
+              onPlay={explore}
+              onHover={(uci) => setBookHover(uci ? { fen: displayFen, uci } : null)}
+              onBackToLine={backToLine}
+            />
+          )}
+          {(draft.mode === "review" || reviewing) && (
+            <ReviewCard
+              game={reviewed}
+              gameMoves={line}
+              moves={moves}
+              leftAt={leftAt}
+              myColor={settings.myColor}
+              stopped={reviewStopped}
+              onLoad={startReview}
+              onResume={resumeReview}
+              onBackToGame={backToLine}
+            />
+          )}
+          <MovePanel
+            move={panelMove}
+            index={panelIndex}
+            start={startQuestions}
+            myColor={settings.myColor}
+            bothSides={settings.mode === "both" || reviewing}
+            learning={learning}
+            reviewing={reviewing}
+            retryable={retryable}
+            onBoard={followsBoard || (live ? panelIndex === moves.length - 1 : panelIndex === shownCount - 1)}
+            coach={status?.coach ?? null}
+            vip={user.vip}
+            model={coachModel}
+            onModelChange={chooseModel}
+            onExplain={explain}
+            onRetry={retry}
+            onAnalyze={(i) => grade(moves[i])}
+            onShowOnBoard={(i) => goTo(i + 1)}
+            boardAhead={
+              boardAhead === null ? null : { label: `${moveNumber(boardAhead)} ${moves[boardAhead].san}`, onPick: () => setPickedId(moves[boardAhead].id) }
+            }
+            active={
+              walkthrough && walkthrough.moveId === panelId && walkStep
+                ? { reply: walkthrough.reply, step: walkthrough.step }
+                : null
+            }
+            onShowStep={(i, step, reply) => showStep(i === START_INDEX ? START_ID : moves[i].id, step, reply)}
+            onAsk={ask}
+            onShowVersion={showQuestionVersion}
+          />
+        </aside>
+
         <div className="board-dock">
           <section className="board-col">
-            {walkthrough && walkStep && (
-              <div className="walk-strip">
-                <span>
-                  Explaining{" "}
-                  <strong>
-                    {moveNumber(walkMoveIndex)} {moves[walkMoveIndex].san}
-                  </strong>{" "}
-                  · {walkthrough.reply !== null && "answer · "}step {walkthrough.step + 1} of {walkSteps.length}
-                </span>
-                <button onClick={() => setWalkthrough(null)} title="Back to the game (Esc)">
-                  <span aria-hidden>✕</span> Esc
-                </button>
-              </div>
-            )}
+            <div className="walk-strip">
+              {walkthrough && walkStep && (
+                <>
+                  <span>
+                    Explaining{" "}
+                    <strong>{walkMove ? `${moveNumber(walkMoveIndex)} ${walkMove.san}` : "the starting position"}</strong> ·{" "}
+                    {walkthrough.reply !== null && "answer · "}step {walkthrough.step + 1} of {walkSteps.length}
+                  </span>
+                  <button onClick={() => setWalkthrough(null)} title="Back to the game (Esc)">
+                    <span aria-hidden>✕</span> Esc
+                  </button>
+                </>
+              )}
+            </div>
             {playerBar(other(orientation))}
             <div className="board-row">
               <EvalBar evaluation={boardEvaluation} orientation={orientation} />
@@ -791,7 +995,8 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
                   lastMove={walkView ? walkView.lastMove : shownMove ? toMove(shownMove.uci) : null}
                   arrows={arrows}
                   marks={marks}
-                  onMove={(from, to, promotion) => (learning ? explore : play)(`${from}${to}${promotion ?? ""}`)}
+                  badge={badge}
+                  onMove={(from, to, promotion) => (followsBoard ? explore : play)(`${from}${to}${promotion ?? ""}`)}
                   onPremove={(premove) => setPremoves((list) => [...list, premove])}
                   onCancelPremoves={() => setPremoves([])}
                 />
@@ -814,45 +1019,23 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
               >
                 <SoundIcon on={soundOn} /> Sound
               </button>
-            </div>
-
-            {(gameEnd ?? result) && live && <div className="banner result">{gameEnd ?? result}</div>}
-            {botError && (
-              <div className="banner error">
-                The bot couldn't move: {botError}
-                <button onClick={() => setBotError(null)}>Try again</button>
+              {/* In the controls' row, so the end of a game or an error doesn't move anything. */}
+              <div className="board-status" role="status" title={botError ? `The bot couldn't move: ${botError}` : (endText ?? undefined)}>
+                {botError ? (
+                  <>
+                    <span className="error-text">The bot couldn't move: {botError}</span>
+                    <button onClick={() => setBotError(null)}>Try again</button>
+                  </>
+                ) : (
+                  endText && <strong>{endText}</strong>
+                )}
               </div>
-            )}
+            </div>
           </section>
         </div>
 
-        <aside className="side-col">
-          <SetupCard draft={draft} onChange={changeDraft} onNewGame={newGame} />
-          {(draft.mode === "learn" || learning) && (
-            <OpeningsCard
-              lines={openingLines}
-              next={library?.next ?? NO_BOOK_MOVES}
-              book={book}
-              study={learning ? study : null}
-              moves={moves}
-              shown={shownCount}
-              fen={displayFen}
-              onPick={startStudy}
-              onPlay={explore}
-              onHover={(uci) => setBookHover(uci ? { fen: displayFen, uci } : null)}
-              onBackToLine={backToLine}
-            />
-          )}
-          {(draft.mode === "review" || reviewing) && (
-            <ReviewCard
-              game={reviewed}
-              moves={moves}
-              myColor={settings.myColor}
-              stopped={reviewStopped}
-              onLoad={startReview}
-              onResume={resumeReview}
-            />
-          )}
+        <aside className="right-col" aria-label="Mode and moves">
+          <ModePicker draft={draft} onChange={changeDraft} />
           <MoveList
             moves={moves}
             current={shownCount - 1}
@@ -860,35 +1043,14 @@ export function App({ user, onSignOut }: { user: string; onSignOut: () => void }
             white={playerName("w")}
             black={playerName("b")}
             score={atReviewEnd ? scoreOf(reviewed.result) : scoreText(game)}
-            onSelect={(i) => goTo(i + 1)}
+            onSelect={(i) => {
+              goTo(i + 1);
+              setPickedId(moves[i].id);
+            }}
             onFirst={() => goTo(0)}
             onPrevious={() => goTo(shownCount - 1)}
             onNext={() => goTo(shownCount + 1)}
             onLast={() => goTo(moves.length)}
-          />
-          <MovePanel
-            move={panelIndex === null ? undefined : moves[panelIndex]}
-            index={panelIndex}
-            myColor={settings.myColor}
-            bothSides={settings.mode === "both" || reviewing}
-            learning={learning}
-            imported={imported}
-            onBoard={learning || (!live && panelIndex === shownCount - 1)}
-            coach={status?.coach ?? null}
-            model={coachModel}
-            onModelChange={chooseModel}
-            onExplain={explain}
-            onRetry={retry}
-            onAnalyze={(i) => grade(moves[i])}
-            onShowOnBoard={(i) => goTo(i + 1)}
-            active={
-              panelIndex !== null && walkthrough?.moveId === moves[panelIndex]?.id && walkStep
-                ? { reply: walkthrough.reply, step: walkthrough.step }
-                : null
-            }
-            onShowStep={(i, step, reply) => showStep(moves[i].id, step, reply)}
-            onAsk={ask}
-            onShowVersion={showQuestionVersion}
           />
         </aside>
       </main>

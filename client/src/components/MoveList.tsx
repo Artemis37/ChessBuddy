@@ -1,6 +1,7 @@
 import { useEffect, useRef, type Ref } from "react";
 import type { Opening } from "../../../shared/openings";
 import { CLASSIFICATION, type PlayedMove } from "../game";
+import { BookIcon } from "./icons";
 
 interface Props {
   moves: PlayedMove[];
@@ -32,9 +33,24 @@ export function MoveList({
   onNext,
   onLast,
 }: Props) {
+  const tableRef = useRef<HTMLDivElement>(null);
   const currentRef = useRef<HTMLButtonElement>(null);
+  // Keeps the current move in view by scrolling the list alone. scrollIntoView would also scroll
+  // every container around it, the page included, and move the buttons under the mouse.
   useEffect(() => {
-    currentRef.current?.scrollIntoView({ block: "nearest" });
+    const table = tableRef.current;
+    const cell = currentRef.current;
+    if (!table) return;
+    if (!cell) {
+      if (current < 0) table.scrollTop = 0;
+      return;
+    }
+    const row = (cell.closest<HTMLElement>(".move-row") ?? cell).getBoundingClientRect();
+    const top = row.top - table.getBoundingClientRect().top + table.scrollTop;
+    if (top < table.scrollTop) table.scrollTop = top;
+    else if (top + row.height > table.scrollTop + table.clientHeight) {
+      table.scrollTop = top + row.height - table.clientHeight;
+    }
   }, [current, moves.length]);
 
   const rows: { number: number; white?: number; black?: number }[] = [];
@@ -54,7 +70,7 @@ export function MoveList({
       <div className="game-title">
         <strong>{white}</strong> - <strong>{black}</strong> <span className="score">{score}</span>
       </div>
-      <div className="move-table" role="table" aria-label="Moves">
+      <div className="move-table" role="table" aria-label="Moves" ref={tableRef}>
         {rows.map((row) => (
           <div className="move-row" role="row" key={row.number}>
             <span className="move-no" role="cell">
@@ -137,15 +153,6 @@ function MoveCell({
       )}
       {cls && <span className={`badge ${cls}`}>{CLASSIFICATION[cls].symbol}</span>}
     </button>
-  );
-}
-
-/** An open book, as chess.com marks book moves. */
-function BookIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden>
-      <path d="M12 6.5C9.5 5 6.5 4.8 4 5.6v12.6c2.5-.8 5.5-.6 8 .9 2.5-1.5 5.5-1.7 8-.9V5.6c-2.5-.8-5.5-.6-8 .9zM12 6.5v12.6" />
-    </svg>
   );
 }
 

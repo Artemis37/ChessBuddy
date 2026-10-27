@@ -149,7 +149,7 @@ describe("coachErrorFrom", () => {
 describe("buildAskRequest", () => {
   it("replays the explanation and earlier questions before the new question", () => {
     const request = buildAskRequest(
-      GRADE,
+      { grade: GRADE },
       ["e4"],
       { summary: "A solid reply.", steps: ["1... e5 claims the center."], lesson: "Fight for the center." },
       [{ question: "Why not d5?", answer: "It's fine too.", steps: ["1... d5 hits e4."] }],
@@ -162,6 +162,48 @@ describe("buildAskRequest", () => {
     expect(request.messages[3].content).toBe("It's fine too.\nStep 1: 1... d5 hits e4.");
     expect(request.messages[4].content).toBe("What about c5?");
     expect(request.output_config?.format?.schema).toHaveProperty("properties.answer");
+  });
+
+  it("asks about the move and the position after it when there's no explanation", () => {
+    const request = buildAskRequest(
+      { grade: GRADE },
+      ["e4"],
+      null,
+      [{ question: "What now?", answer: "Develop.", steps: [] }],
+      "And then?",
+      { model: "claude-haiku-5-5", perspective: "opponent" },
+      "low",
+    );
+    // The facts and the first question are one turn, so the roles still alternate.
+    expect(request.messages.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
+    const first = request.messages[0].content as string;
+    expect(first).toMatch(/^I have a question about my opponent's move 1\.\.\. e5 and the position after it\./);
+    expect(first).not.toMatch(/Explain/);
+    expect(first).toMatch(/\n\nWhat now\?$/);
+    expect(request.messages[2].content).toBe("And then?");
+  });
+
+  it("asks about a position before any move with the engine's best lines there", () => {
+    const start = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+    const analysis = [
+      { score: { cp: 30 }, pv: ["e2e4", "e7e5"] },
+      { score: { cp: 25 }, pv: ["d2d4"] },
+    ];
+    const request = buildAskRequest(
+      { fen: start, analysis },
+      [],
+      null,
+      [],
+      "What should White play?",
+      { model: "claude-haiku-5-5", perspective: "mine" },
+      "low",
+    );
+    expect(request.messages).toHaveLength(1);
+    const text = request.messages[0].content as string;
+    expect(text).toMatch(/^I have a question about this position\. White is to move; I am White\./);
+    expect(text).toContain('"1": "1. e4"');
+    expect(text).toContain("Engine choice 2 (evaluation +0.25)");
+    expect(text).toMatch(/What should White play\?$/);
   });
 });
 
@@ -254,6 +296,33 @@ describe("Coach tool loop", () => {
     });
     expect(explanation.steps[0].moves.map((m) => m.san)).toEqual(["g6", "Qf3"]);
     expect(userText(requests[0])).toContain('"book"');
+  });
+
+  it("answers a question about the start position with steps from the engine's lines", async () => {
+    const start = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+    const reply = {
+      ...answer,
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            answer: "1. e4 takes the centre.",
+            steps: [{ caption: "1. e4 and 1... e5.", line: "best1", fromMove: 1, toMove: 2, arrows: [], marks: [] }],
+          }),
+        },
+      ],
+    };
+    const { client } = fakeClient([reply]);
+    const answered = await new Coach("claude-sonnet-5-5", "medium", client).ask(
+      { fen: start, analysis: [{ score: { cp: 30 }, pv: ["e2e4", "e7e5", "g1f3"] }] },
+      [],
+      null,
+      [],
+      "What should I play?",
+      { model: "claude-sonnet-5-5", perspective: "mine", engine },
+    );
+    expect(answered.answer).toBe("1. e4 takes the centre.");
+    expect(answered.steps[0]).toMatchObject({ fen: start, moves: [{ san: "e4" }, { san: "e5" }] });
   });
 
   it("turns tools off on the last round so the coach has to answer", async () => {

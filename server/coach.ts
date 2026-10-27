@@ -1,10 +1,21 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { formatEval } from "../shared/evaluation";
 import { numberedLine, numberedMoves } from "../shared/notation";
-import type { CoachReply, Explanation, FollowUp, MoveGrade, OpeningContext, Perspective } from "../shared/types";
+import type {
+  CoachReply,
+  Color,
+  EngineLine,
+  Explanation,
+  FollowUp,
+  MoveGrade,
+  OpeningContext,
+  Perspective,
+} from "../shared/types";
 import {
   boardLines,
   bookLine,
   buildSteps,
+  positionLines,
   tryMoves,
   type BoardLine,
   type LineEngine,
@@ -31,7 +42,7 @@ Your explanation is a one-sentence summary, two to four steps, and a one-line le
 
 Show, don't tell: every move you name should be played on the board by a step, and no line should exist only as text. To show a move that isn't in the board lines (a tempting alternative, a mistake to avoid, a move the player asks about), call try_moves first: it plays your moves, lets the engine continue with best play, and returns a new board line for your steps.
 
-After the explanation, the player may ask follow-up questions. Answer in at most 40 words and let zero to three steps do the showing, using the board lines or new ones from try_moves. When the question is about a move or a line, show it.
+The player may also ask questions: follow-ups after an explanation, questions about a move and the position after it with no explanation before them, or questions about a position before any move was played (then the board lines are the engine's best moves there). Answer in at most 40 words and let zero to three steps do the showing, using the board lines or new ones from try_moves. When the question is about a move or a line, show it. To show a move in the position after the move played, branch from the "played" line after its first move.
 
 Arrows and outlines appear after the step's moves are played, so they must be true in that position: an arrow goes from a piece to a square it attacks, defends or can move to. Use them sparingly, at most two of each per step.
 
@@ -43,7 +54,7 @@ For the player's own move, address the player as "you". For the opponent's move,
 
 Some requests come from a player learning an opening, with facts about it. Explain such a move as opening theory: what it is for (development, the centre, king safety, a pawn break, a typical piece placement), the plan it belongs to, and a trap or common mistake to know about. The "book" board line, when given, is how the line the player is learning goes on: show the plan with it rather than with the engine's lines, which may leave that line. Book moves are established theory, so don't call them mistakes over small engine differences, though you may say when the engine dislikes a gambit or sideline. For a move off the book, compare it with the book move and show both.
 
-The engine facts are always written from the side that played the move: "+" evaluations favour that side, "#3" means that side can force mate in 3, "-#2" means the other side can, and words like "your knight" in the computed facts mean that side's pieces. Winning chances are on a 0-100 scale for that side.
+The engine facts are always written from the side that played the move (for a position before any move, the side to move): "+" evaluations favour that side, "#3" means that side can force mate in 3, "-#2" means the other side can, and words like "your knight" in the computed facts mean that side's pieces. Winning chances are on a 0-100 scale for that side.
 
 Moves carry move numbers: "3. d4" is a White move and "2... Nxa6" is a Black move. Write moves in SAN with their numbers as the board lines give them.`;
 
@@ -160,6 +171,12 @@ export interface ExplanationText {
   lesson: string;
 }
 
+/**
+ * What a question is about: a move, by its grade, or a position no move has led to yet (the
+ * start of the game), with the engine's analysis of it.
+ */
+export type AskSubject = { grade: MoveGrade } | { fen: string; analysis: EngineLine[] };
+
 interface StepsAnswer {
   steps: StepPlan[];
 }
@@ -181,30 +198,31 @@ export class Coach {
   }
 
   async explain(grade: MoveGrade, history: string[], options: ExplainOptions): Promise<Explanation> {
-    const lines = await linesFor(grade, options);
+    const lines = await linesFor({ grade }, options);
     const { answer, model } = await this.run<StepsAnswer & { summary: string; lesson: string }>(
       buildExplainRequest(grade, history, options, this.effort, lines),
       lines,
-      grade,
+      grade.mover,
       options.engine,
       "explain this move",
     );
     return { summary: answer.summary, steps: buildSteps(lines, answer.steps), lesson: answer.lesson, model };
   }
 
+  /** Answers a question about a move, after its explanation or without one, or about a position. */
   async ask(
-    grade: MoveGrade,
+    subject: AskSubject,
     history: string[],
-    explanation: ExplanationText,
+    explanation: ExplanationText | null,
     thread: FollowUp[],
     question: string,
     options: ExplainOptions,
   ): Promise<CoachReply> {
-    const lines = await linesFor(grade, options);
+    const lines = await linesFor(subject, options);
     const { answer, model } = await this.run<StepsAnswer & { answer: string }>(
-      buildAskRequest(grade, history, explanation, thread, question, options, this.effort, lines),
+      buildAskRequest(subject, history, explanation, thread, question, options, this.effort, lines),
       lines,
-      grade,
+      moverOf(subject),
       options.engine,
       "answer",
     );
@@ -218,7 +236,8 @@ export class Coach {
   private async run<T>(
     request: Request,
     lines: Record<string, BoardLine>,
-    grade: MoveGrade,
+    /** The side the facts are written from, for the evaluations try_moves reports. */
+    mover: Color,
     engine: LineEngine | undefined,
     task: string,
   ): Promise<{ answer: T; model: string }> {
@@ -254,7 +273,7 @@ export class Coach {
         // One at a time: the engine connection answers one request at a time anyway.
         for (const block of response.content) {
           if (block.type !== "tool_use") continue;
-          results.push(await runTryMoves(block, lines, grade, engine));
+          results.push(await runTryMoves(block, lines, mover, engine));
         }
         messages.push({ role: "user", content: results });
         continue;
@@ -273,11 +292,25 @@ export class Coach {
   }
 }
 
-/** The engine's lines for the move, plus the opening book's line when the player is learning an opening. */
-async function linesFor(grade: MoveGrade, { opening, engine }: ExplainOptions): Promise<Record<string, BoardLine>> {
-  const lines = boardLines(grade);
+/** The side the facts about a subject are written from: the move's mover, or the side to move. */
+function moverOf(subject: AskSubject): Color {
+  return "grade" in subject ? subject.grade.mover : (subject.fen.split(" ")[1] as Color);
+}
+
+/** The engine's lines for the move or position, without the opening book's. */
+function subjectLines(subject: AskSubject): Record<string, BoardLine> {
+  return "grade" in subject ? boardLines(subject.grade) : positionLines(subject.fen, subject.analysis);
+}
+
+/** The engine's lines for the subject, plus the opening book's line when the player is learning an opening. */
+async function linesFor(subject: AskSubject, { opening, engine }: ExplainOptions): Promise<Record<string, BoardLine>> {
+  const lines = subjectLines(subject);
   if (opening && opening.line.length > 0 && engine) {
-    const book = await bookLine(grade.fenBefore, opening.line, engine, grade.positionBefore);
+    const [fen, fallback] =
+      "grade" in subject
+        ? [subject.grade.fenBefore, subject.grade.positionBefore]
+        : [subject.fen, lines.best1?.evaluation ?? { score: { cp: 0 } }];
+    const book = await bookLine(fen, opening.line, engine, fallback);
     if (book) lines.book = book;
   }
   return lines;
@@ -286,14 +319,14 @@ async function linesFor(grade: MoveGrade, { opening, engine }: ExplainOptions): 
 async function runTryMoves(
   block: Anthropic.Beta.BetaToolUseBlock,
   lines: Record<string, BoardLine>,
-  grade: MoveGrade,
+  mover: Color,
   engine: LineEngine,
 ): Promise<Anthropic.Beta.BetaToolResultBlockParam> {
   const fail = (message: string) => ({ type: "tool_result" as const, tool_use_id: block.id, content: message, is_error: true });
   if (block.name !== "try_moves") return fail(`Unknown tool ${block.name}.`);
   let result;
   try {
-    result = await tryMoves(lines, block.input as TryMovesInput, grade.mover, engine);
+    result = await tryMoves(lines, block.input as TryMovesInput, mover, engine);
   } catch (err) {
     return fail(`The engine couldn't analyze that: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -332,34 +365,56 @@ export function buildExplainRequest(
 ): Request {
   return {
     ...baseRequest(model, effort, EXPLANATION_SCHEMA),
-    messages: [{ role: "user", content: describeMove(grade, history, perspective, lines, opening) }],
+    messages: [{ role: "user", content: describeMove(grade, history, perspective, lines, opening, "explain") }],
   };
 }
 
-/** The explanation and earlier questions are replayed as text, followed by the new question. */
+/**
+ * The facts, the explanation if there is one, and earlier questions are replayed as text,
+ * followed by the new question. Without an explanation the facts and the first question make
+ * one user turn.
+ */
 export function buildAskRequest(
-  grade: MoveGrade,
+  subject: AskSubject,
   history: string[],
-  explanation: ExplanationText,
+  explanation: ExplanationText | null,
   thread: FollowUp[],
   question: string,
   { model, perspective, opening }: ExplainOptions,
   effort: Effort,
-  lines = boardLines(grade),
+  lines = subjectLines(subject),
 ): Request {
-  const messages: Anthropic.Beta.BetaMessageParam[] = [
-    { role: "user", content: describeMove(grade, history, perspective, lines, opening) },
-    {
+  const facts =
+    "grade" in subject
+      ? describeMove(subject.grade, history, perspective, lines, opening, explanation ? "explain" : "ask")
+      : describePosition(subject, history, perspective, lines, opening);
+  const turns: Anthropic.Beta.BetaMessageParam[] = [{ role: "user", content: facts }];
+  if (explanation) {
+    turns.push({
       role: "assistant",
       content: `${explanation.summary}\n${stepList(explanation.steps)}\nLesson: ${explanation.lesson}`,
-    },
-  ];
-  for (const earlier of thread) {
-    messages.push({ role: "user", content: earlier.question });
-    messages.push({ role: "assistant", content: `${earlier.answer}\n${stepList(earlier.steps)}` });
+    });
   }
-  messages.push({ role: "user", content: question });
-  return { ...baseRequest(model, effort, REPLY_SCHEMA), messages };
+  for (const earlier of thread) {
+    turns.push({ role: "user", content: earlier.question });
+    turns.push({ role: "assistant", content: `${earlier.answer}\n${stepList(earlier.steps)}` });
+  }
+  turns.push({ role: "user", content: question });
+  return { ...baseRequest(model, effort, REPLY_SCHEMA), messages: mergeTurns(turns) };
+}
+
+/** Joins consecutive turns of the same role, so the conversation alternates. */
+function mergeTurns(turns: Anthropic.Beta.BetaMessageParam[]): Anthropic.Beta.BetaMessageParam[] {
+  const merged: Anthropic.Beta.BetaMessageParam[] = [];
+  for (const turn of turns) {
+    const last = merged[merged.length - 1];
+    if (last && last.role === turn.role && typeof last.content === "string" && typeof turn.content === "string") {
+      merged[merged.length - 1] = { role: last.role, content: `${last.content}\n\n${turn.content}` };
+    } else {
+      merged.push(turn);
+    }
+  }
+  return merged;
 }
 
 function stepList(captions: string[]): string {
@@ -397,12 +452,17 @@ function numberedMoveMap(line: BoardLine): Record<string, string> {
   return Object.fromEntries(numberedMoves(line.fen, line.moves).map((move, i) => [String(i + 1), move]));
 }
 
+/**
+ * The request about a move with its engine facts. With "ask", the player has a question about the
+ * move and the position after it rather than asking for an explanation.
+ */
 function describeMove(
   grade: MoveGrade,
   history: string[],
   perspective: Perspective,
   lines: Record<string, BoardLine>,
-  opening?: OpeningContext,
+  opening: OpeningContext | undefined,
+  purpose: "explain" | "ask",
 ): string {
   const mover = grade.mover === "w" ? "White" : "Black";
   const other = grade.mover === "w" ? "Black" : "White";
@@ -430,12 +490,57 @@ function describeMove(
     computedFacts: grade.motifs,
     ...(opening && { opening: openingFacts(grade, opening) }),
   };
-  const ask = opening
-    ? openingQuestion(played, mover, perspective === "mine" ? mover : other, opening, grade.fenBefore)
-    : perspective === "mine"
-      ? `Explain my move ${played} (I am ${mover}).`
-      : `Explain my opponent's move ${played}. My opponent is ${mover}; I am ${other}.`;
+  const ask =
+    purpose === "ask"
+      ? `${opening ? `I'm learning the ${opening.studying} as ${perspective === "mine" ? mover : other}. ` : ""}${
+          perspective === "mine"
+            ? `I have a question about my move ${played} and the position after it (I am ${mover}).`
+            : `I have a question about my opponent's move ${played} and the position after it. My opponent is ${mover}; I am ${other}.`
+        }`
+      : opening
+        ? openingQuestion(played, mover, perspective === "mine" ? mover : other, opening, grade.fenBefore)
+        : perspective === "mine"
+          ? `Explain my move ${played} (I am ${mover}).`
+          : `Explain my opponent's move ${played}. My opponent is ${mover}; I am ${other}.`;
   return `${ask}\n\nEngine facts, written from ${mover}'s side:\n${JSON.stringify(facts, null, 2)}`;
+}
+
+/** The request about a position no move has led to yet, with the engine's best moves there. */
+function describePosition(
+  subject: { fen: string; analysis: EngineLine[] },
+  history: string[],
+  perspective: Perspective,
+  lines: Record<string, BoardLine>,
+  opening?: OpeningContext,
+): string {
+  const toMove = moverOf(subject) === "w" ? "White" : "Black";
+  const other = toMove === "White" ? "Black" : "White";
+  const me = perspective === "mine" ? toMove : other;
+  const about: Record<string, string> = {
+    book: "The opening book's line from this position: how the opening usually goes on",
+  };
+  subject.analysis
+    .filter((line) => line.pv.length > 0)
+    .forEach((line, i) => {
+      about[`best${i + 1}`] = `Engine choice ${i + 1} (evaluation ${formatEval(line.score)})`;
+    });
+  const facts = {
+    toMove,
+    movesSoFar: history.length > 0 ? numberedLine(START_FEN, history) : "(starting position)",
+    position: subject.fen,
+    boardLines: Object.fromEntries(
+      Object.entries(lines).map(([id, line]) => [id, { about: about[id], moves: numberedMoveMap(line) }]),
+    ),
+    ...(opening && {
+      opening: {
+        learning: opening.studying,
+        positionIsCalled: opening.reached ?? "(no name of its own)",
+        bookMovesHere: opening.bookMoves.length > 0 ? bookMoveList(subject.fen, opening.bookMoves) : "none",
+      },
+    }),
+  };
+  const ask = `${opening ? `I'm learning the ${opening.studying} as ${me}. ` : ""}I have a question about this position. ${toMove} is to move; I am ${me}.`;
+  return `${ask}\n\nEngine facts, written from ${toMove}'s side (the side to move):\n${JSON.stringify(facts, null, 2)}`;
 }
 
 /** Book moves named in the facts; the rest are rarely played. */

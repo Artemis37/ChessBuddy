@@ -69,6 +69,28 @@ export function boardLines(grade: MoveGrade): Record<string, BoardLine> {
   return lines;
 }
 
+/** How many moves of an engine line in a position with no move to explain the coach gets to show. */
+const POSITION_LINE_PLIES = 8;
+
+/**
+ * The lines the coach can show for a position no move has led to yet, such as the start of the
+ * game: "best1".."best3" are the engine's top moves there, from `analysis`.
+ */
+export function positionLines(fen: string, analysis: EngineLine[]): Record<string, BoardLine> {
+  const side = new Chess(fen).turn();
+  const lines: Record<string, BoardLine> = {};
+  analysis
+    .filter((line) => line.pv.length > 0)
+    .forEach((line, i) => {
+      lines[`best${i + 1}`] = {
+        fen,
+        moves: sanLine(fen, line.pv.slice(0, POSITION_LINE_PLIES)),
+        evaluation: { score: toWhite(line.score, side) },
+      };
+    });
+  return lines;
+}
+
 /**
  * The opening book's line from the position before the move, so the coach can show how the
  * opening usually goes on. Moves that don't fit the position end the line. The evaluation is

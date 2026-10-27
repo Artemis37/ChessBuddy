@@ -189,6 +189,16 @@ select {
   font-size: 13px;
 }
 
+.vip {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #e3b341;
+  color: #1f1e1b;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
 /* Sign-in */
 
 .login-page {
@@ -257,29 +267,92 @@ select {
   text-align: center;
 }
 
-/* Layout */
+/* Layout: the coach's panel on the left, the board in the middle, the mode and the moves on the
+   right. On wide screens the page itself never scrolls: each side column scrolls on its own, so
+   content that grows or shrinks there (an explanation, an answer) never moves the board or the
+   move buttons. */
+
+.app {
+  --side-width: 340px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  /* clip, not hidden: a hidden overflow can still be scrolled by scrollIntoView or focus. */
+  overflow: clip;
+}
+
+.topbar {
+  flex: none;
+}
 
 .layout {
-  display: flex;
-  gap: 24px;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: var(--side-width) auto var(--side-width);
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: "left board right";
   justify-content: center;
-  align-items: flex-start;
-  /* No bottom padding here: it would stop the sticky board short of the page end and push it up. */
+  gap: 20px;
   padding: 0 20px;
 }
 
-/* Keeps the board in the middle of the window while the side panel scrolls. */
+.left-col,
+.right-col {
+  /* Holds absolutely positioned content, such as hidden labels, inside the column: placed
+     against the page, it would make the page taller than the window and let it scroll. */
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 0;
+}
+
+.left-col {
+  grid-area: left;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* The browser would otherwise anchor the page's scroll to content in here, and scroll the
+     page whenever the move panel changes. */
+  overflow-anchor: none;
+  scrollbar-width: thin;
+  scrollbar-color: #4b4845 transparent;
+}
+
+.left-col > * {
+  flex: none;
+}
+
+.right-col {
+  grid-area: right;
+}
+
+/* The move list fills the column, so its buttons stay at the bottom wherever you are in the game. */
+.right-col .moves {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.right-col .move-table {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+/* Keeps the board in the middle of the window. */
 .board-dock {
-  position: sticky;
-  top: var(--topbar-height);
-  height: calc(100vh - var(--topbar-height));
+  grid-area: board;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  flex: 0 1 auto;
   /* Fit the board to the window height, as chess.com does, leaving room for the player bars
-     and for the explanation strip above them. */
-  width: min(780px, calc(100vh - 220px));
+     and for the explanation strip above them, and to the width the side columns leave. */
+  width: min(780px, calc(100vh - 220px), calc(100vw - 2 * var(--side-width) - 100px));
   min-width: 300px;
 }
 
@@ -304,9 +377,17 @@ select {
   gap: 8px;
   font-size: 13px;
   color: var(--text-body);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.walk-strip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .walk-strip button {
+  flex: none;
   padding: 1px 8px;
   font-size: 12px;
   color: #c6c6c6;
@@ -322,44 +403,88 @@ select {
   min-width: 0;
 }
 
-.side-col {
-  flex: 0 0 400px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  min-width: 0;
-  padding: 16px 0;
-}
-
-@media (max-width: 1000px) {
+/* Two columns: the board, and the mode and moves above the coach's panel. */
+@media (max-width: 1179px) {
   .layout {
-    flex-direction: column;
-    align-items: stretch;
-    padding: 12px 16px;
+    grid-template-columns: auto var(--side-width);
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas:
+      "board right"
+      "board left";
+    gap: 0 20px;
   }
 
   .board-dock {
-    position: static;
+    width: min(780px, calc(100vh - 220px), calc(100vw - var(--side-width) - 80px));
+  }
+
+  .right-col {
+    padding-bottom: 0;
+  }
+
+  .right-col .moves {
+    flex: none;
+  }
+
+  .right-col .move-table {
+    flex: none;
+    height: clamp(120px, 24vh, 260px);
+  }
+
+  .left-col {
+    padding-top: 12px;
+  }
+}
+
+/* One column: the board, the moves and the mode, then the coach's panel, which scrolls on its
+   own so the page keeps its height while you step through the game. */
+@media (max-width: 759px) {
+  .app {
     height: auto;
+    overflow: visible;
+  }
+
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    grid-template-areas:
+      "board"
+      "right"
+      "left";
+    gap: 12px;
+    padding: 8px 12px 16px;
+  }
+
+  .board-dock {
     width: 100%;
     min-width: 0;
   }
 
-  .side-col {
-    padding-top: 0;
+  .right-col,
+  .left-col {
+    padding: 0;
   }
 
+  .right-col .moves {
+    order: -1;
+  }
+
+  .right-col .move-table {
+    height: 200px;
+  }
+
+  .left-col {
+    height: 75vh;
+  }
+
+  .left-col .panel {
+    order: -1;
+  }
+
+  /* Always takes its room, so starting or ending an explanation doesn't move the board. */
   .walk-strip {
     position: static;
-  }
-
-  .side-col {
-    flex-basis: auto;
-  }
-
-  /* On one column, keep the move review right under the board. */
-  .side-col .setup {
-    order: 1;
+    flex: none;
   }
 }
 
@@ -388,27 +513,78 @@ select {
 }
 
 .sq.light {
-  background: var(--square-light);
+  background-color: var(--square-light);
 }
 
 .sq.dark {
-  background: var(--square-dark);
+  background-color: var(--square-dark);
 }
 
 .sq.light.highlight {
-  background: var(--highlight-light);
+  background-color: var(--highlight-light);
 }
 
 .sq.dark.highlight {
-  background: var(--highlight-dark);
+  background-color: var(--highlight-dark);
 }
 
 .sq.light.premove {
-  background: var(--premove-light);
+  background-color: var(--premove-light);
 }
 
 .sq.dark.premove {
-  background: var(--premove-dark);
+  background-color: var(--premove-dark);
+}
+
+/* A graded last move's squares take the grade's color, and drawn squares their own, laid
+   over the square's color as on chess.com. */
+.sq.tint,
+.sq.note {
+  background-image: linear-gradient(var(--overlay), var(--overlay));
+}
+
+.sq.tint-best {
+  --overlay: color-mix(in srgb, var(--best) 55%, transparent);
+}
+
+.sq.tint-excellent {
+  --overlay: color-mix(in srgb, var(--excellent) 55%, transparent);
+}
+
+.sq.tint-good {
+  --overlay: color-mix(in srgb, var(--good) 55%, transparent);
+}
+
+.sq.tint-inaccuracy {
+  --overlay: color-mix(in srgb, var(--inaccuracy) 55%, transparent);
+}
+
+.sq.tint-mistake {
+  --overlay: color-mix(in srgb, var(--mistake) 55%, transparent);
+}
+
+.sq.tint-blunder {
+  --overlay: color-mix(in srgb, var(--blunder) 55%, transparent);
+}
+
+.sq.tint-book {
+  --overlay: color-mix(in srgb, var(--book) 55%, transparent);
+}
+
+.sq.note-red {
+  --overlay: rgba(235, 97, 80, 0.8);
+}
+
+.sq.note-orange {
+  --overlay: rgba(255, 170, 0, 0.8);
+}
+
+.sq.note-green {
+  --overlay: rgba(172, 206, 89, 0.8);
+}
+
+.sq.note-blue {
+  --overlay: rgba(82, 176, 220, 0.8);
 }
 
 .sq.grab {
@@ -514,6 +690,40 @@ select {
   height: 100%;
   pointer-events: none;
   z-index: 5;
+}
+
+/* The last move's grade icon on the corner of its square, as in chess.com's review. */
+.board-badge {
+  position: absolute;
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  color: #fff;
+  font-size: calc(var(--sq) * 0.2);
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.05em;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  animation: badge-pop 160ms ease-out;
+}
+
+.board-badge svg {
+  width: 64%;
+  height: 64%;
+  fill: none;
+  stroke: #fff;
+  stroke-width: 2.4;
+  stroke-linejoin: round;
+}
+
+@keyframes badge-pop {
+  from {
+    transform: translate(-50%, -50%) scale(0.4);
+    opacity: 0;
+  }
 }
 
 .promo-backdrop {
@@ -716,44 +926,29 @@ select {
   color: var(--text-body);
 }
 
-.banner {
+/* The end of the game, or the bot's error, on one line next to the controls: it never takes room
+   of its own, so it can't move the board. The full text is in its tooltip. */
+.board-status {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding: 10px 14px;
-  border-radius: 6px;
-  background: var(--surface);
-  margin-left: 34px;
+  justify-content: flex-end;
+  gap: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  font-size: 14px;
 }
 
-.banner button {
-  margin-left: auto;
+.board-status > span,
+.board-status > strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.banner.result {
-  font-weight: 700;
-  justify-content: center;
-}
-
-.banner.error {
-  color: var(--error);
-}
-
-.legend {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.legend i {
-  display: inline-block;
-  width: 14px;
-  height: 4px;
-  border-radius: 2px;
-  margin-left: 6px;
+.board-status button {
+  flex: none;
 }
 
 /* Side panel */
@@ -801,12 +996,16 @@ select {
   color: var(--text);
 }
 
+.mode-card {
+  flex: none;
+  padding: 8px;
+}
+
 .setup-row {
   display: flex;
   align-items: flex-end;
   gap: 12px;
   flex-wrap: wrap;
-  margin-top: 12px;
 }
 
 .setup-row label {
@@ -1150,9 +1349,15 @@ select {
 }
 
 .move-table {
-  min-height: 180px;
-  max-height: 300px;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #4b4845 transparent;
+}
+
+.opening,
+.game-title,
+.move-nav {
+  flex: none;
 }
 
 .move-row {
@@ -1265,6 +1470,10 @@ select {
   display: inline-grid;
   place-items: center;
   height: 17px;
+}
+
+.badge.book,
+.board-badge.book {
   background: var(--book);
 }
 
@@ -1278,31 +1487,37 @@ select {
 }
 
 .badge.best,
+.board-badge.best,
 .tag.best {
   background: var(--best);
 }
 
 .badge.excellent,
+.board-badge.excellent,
 .tag.excellent {
   background: var(--excellent);
 }
 
 .badge.good,
+.board-badge.good,
 .tag.good {
   background: var(--good);
 }
 
 .badge.inaccuracy,
+.board-badge.inaccuracy,
 .tag.inaccuracy {
   background: var(--inaccuracy);
 }
 
 .badge.mistake,
+.board-badge.mistake,
 .tag.mistake {
   background: var(--mistake);
 }
 
 .badge.blunder,
+.board-badge.blunder,
 .tag.blunder {
   background: var(--blunder);
 }
@@ -1485,7 +1700,21 @@ select {
   margin-top: 10px;
 }
 
-/* Follow-up questions */
+/* Questions to the coach, after an explanation or without one */
+
+.questions {
+  margin-top: 4px;
+}
+
+.board-ahead button.tool {
+  padding: 0 2px;
+  color: var(--text-body);
+  text-decoration: underline;
+}
+
+.branch {
+  margin-top: 4px;
+}
 
 .exchange {
   margin-top: 14px;

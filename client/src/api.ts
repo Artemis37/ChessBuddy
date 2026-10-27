@@ -38,15 +38,19 @@ export const api = {
   evaluate: (fen: string) => request<PositionEval>("/api/eval", { fen }),
   explain: (grade: MoveGrade, history: string[], model: string, perspective: Perspective, opening?: OpeningContext) =>
     request<Explanation>("/api/explain", { grade, history, model, perspective, opening }),
-  ask: (
-    grade: MoveGrade,
-    history: string[],
-    model: string,
-    perspective: Perspective,
-    explanation: { summary: string; steps: string[]; lesson: string },
-    thread: FollowUp[],
-    question: string,
-    opening?: OpeningContext,
-  ) =>
-    request<CoachReply>("/api/ask", { grade, history, model, perspective, explanation, thread, question, opening }),
+  /**
+   * Asks about a move (its grade), after its explanation or without one, or about a position no
+   * move has led to (fen), such as the start of the game.
+   */
+  ask: (body: {
+    grade?: MoveGrade;
+    fen?: string;
+    history: string[];
+    model: string;
+    perspective: Perspective;
+    explanation?: { summary: string; steps: string[]; lesson: string };
+    thread: FollowUp[];
+    question: string;
+    opening?: OpeningContext;
+  }) => request<CoachReply>("/api/ask", body),
 };

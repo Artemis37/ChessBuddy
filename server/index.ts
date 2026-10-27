@@ -4,7 +4,7 @@ import { z } from "zod";
 import { createApp } from "./app";
 import { Auth } from "./auth/auth";
 import { SqlUserStore } from "./auth/sqlUsers";
-import { MemoryUserStore, type UserStore } from "./auth/users";
+import { MemoryUserStore, ownerAccount, type UserStore } from "./auth/users";
 import { Bot } from "./bot/bot";
 import { Coach } from "./coach";
 import { McpStockfishEngine, type EngineTarget } from "./engine/mcpEngine";
@@ -31,6 +31,8 @@ const botEngine = new McpStockfishEngine(engineTarget);
 const bot = new Bot(botEngine);
 const coach = new Coach(process.env.COACH_MODEL ?? "claude-sonnet-5-5", COACH_EFFORT);
 
+// The owner signs in against this hash, never the database; everyone else is looked up in Azure SQL.
+const owner = ownerAccount(process.env.OWNER_PASSWORD_HASH);
 const users: UserStore = process.env.SQL_CONNECTION_STRING
   ? new SqlUserStore(process.env.SQL_CONNECTION_STRING)
   : new MemoryUserStore();
@@ -39,7 +41,7 @@ if (!sessionSecret) {
   sessionSecret = randomBytes(32).toString("base64url");
   console.warn("SESSION_SECRET isn't set: using a random one, so restarting the server signs everyone out.");
 }
-const auth = new Auth(users, sessionSecret);
+const auth = new Auth(users, sessionSecret, { owner });
 
 const { app, checkEngine, engineError } = createApp({
   analyzer,
@@ -61,8 +63,13 @@ app.listen(PORT, (error?: Error) => {
   console.log(coach.configured ? `Coach: ${coach.defaultModel} (default)` : "Coach: no ANTHROPIC_API_KEY yet (Explain is disabled)");
   console.log(
     process.env.SQL_CONNECTION_STRING
-      ? "Accounts: Azure SQL (connects on the first sign-in)"
-      : "Accounts: built-in account only (set SQL_CONNECTION_STRING to use Azure SQL)",
+      ? "Accounts: Azure SQL (connects on the first sign-in of an account other than the owner)"
+      : "Accounts: the owner only (set SQL_CONNECTION_STRING to use Azure SQL for other accounts)",
+  );
+  console.log(
+    process.env.OWNER_PASSWORD_HASH?.trim()
+      ? `Owner ${owner.username}: password hash from OWNER_PASSWORD_HASH`
+      : `Owner ${owner.username}: default password hash from the code (set OWNER_PASSWORD_HASH to change the password)`,
   );
   console.log("url" in engineTarget ? `Engine: ${engineTarget.url}` : `Engine: Docker image ${engineTarget.image}`);
   checkEngine().then(

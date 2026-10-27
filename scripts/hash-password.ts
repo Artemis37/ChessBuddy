@@ -1,4 +1,5 @@
-// Prints the scrypt hash for a new password, to store in chessbuddy.Users.PasswordHash.
+// Prints the scrypt hash for a new password: for scripts/add-user.sql (chessbuddy.Users.PasswordHash),
+// or for the owner's OWNER_PASSWORD_HASH.
 // Usage: npm run password:hash -- "<new password>"
 import { hashPassword } from "../server/auth/password";
 

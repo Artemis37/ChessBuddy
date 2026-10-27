@@ -1,6 +1,8 @@
 import { Chess, type PieceSymbol, type Square } from "chess.js";
 import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from "react";
-import type { Color } from "../../../shared/types";
+import type { Classification, Color } from "../../../shared/types";
+import { BookIcon } from "../components/icons";
+import { CLASSIFICATION } from "../game";
 import { cellOf, displaySquares, isLightSquare, squareAtPoint } from "./geometry";
 import {
   castlingOf,
@@ -18,6 +20,44 @@ export interface BoardArrow {
   color: string;
 }
 
+/** A move's grade icon, drawn on the corner of the square its piece moved to. */
+export interface BoardBadge {
+  square: Square;
+  kind: Classification | "book";
+}
+
+/** Colors of the arrows and squares you draw with the right mouse button, as on chess.com. */
+type NoteColor = "orange" | "red" | "green" | "blue";
+const NOTE_ARROW: Record<NoteColor, string> = {
+  orange: "rgba(255, 170, 0, 0.8)",
+  red: "rgba(248, 85, 63, 0.8)",
+  green: "rgba(159, 207, 63, 0.8)",
+  blue: "rgba(72, 193, 249, 0.8)",
+};
+
+/** chess.com's modifiers: Shift green, Ctrl red, Alt blue; a plain arrow is orange and a plain square red. */
+function noteColor(event: PointerEvent, plain: NoteColor, ctrl: NoteColor): NoteColor {
+  if (event.shiftKey) return "green";
+  if (event.ctrlKey || event.metaKey) return ctrl;
+  if (event.altKey) return "blue";
+  return plain;
+}
+
+interface Notes {
+  arrows: { from: Square; to: Square; color: NoteColor }[];
+  squares: Partial<Record<Square, NoteColor>>;
+}
+
+const NO_NOTES: Notes = { arrows: [], squares: {} };
+
+/** A right-button drag in progress: an arrow from `from`, or a square note while it stays there. */
+interface Drawing {
+  from: Square;
+  to: Square;
+  arrow: NoteColor;
+  square: NoteColor;
+}
+
 interface Props {
   fen: string;
   orientation: Color;
@@ -30,6 +70,8 @@ interface Props {
   arrows?: BoardArrow[];
   /** Squares outlined in red, such as a hanging piece in an explanation. */
   marks?: string[];
+  /** The last move's grade icon; its squares then take the grade's color instead of yellow. */
+  badge?: BoardBadge | null;
   onMove: (from: Square, to: Square, promotion?: PieceSymbol) => boolean;
   onPremove: (premove: Premove) => void;
   onCancelPremoves: () => void;
@@ -59,7 +101,8 @@ type Slides = Map<Square, { dx: number; dy: number }>;
  * rings. While the opponent thinks, moves are queued as premoves (shown in red) and the
  * board shows where the premoved pieces will stand. Every change of position slides the
  * moved pieces into place. Uses pointer events rather than HTML drag and drop, so there
- * is no drag ghost.
+ * is no drag ghost. As on chess.com, dragging with the right button draws an arrow and
+ * right-clicking a square colors it; a left click or a new position clears them.
  */
 export function Board({
   fen,
@@ -70,6 +113,7 @@ export function Board({
   lastMove,
   arrows = [],
   marks = [],
+  badge = null,
   onMove,
   onPremove,
   onCancelPremoves,
@@ -88,6 +132,8 @@ export function Board({
     key: 0,
     orientation,
   });
+  const [notes, setNotes] = useState<Notes>(NO_NOTES);
+  const [drawing, setDrawing] = useState<Drawing | null>(null);
   /** The last move made by dropping a piece; it is already in place and needs no animation. */
   const dropped = useRef<string | null>(null);
   const previous = useRef<{ placement: Placement; orientation: Color } | null>(null);
@@ -133,6 +179,12 @@ export function Board({
     if (!drag) setSelected(null);
     setPromotion(null);
   }, [fen, orientation, movable, premoveColor]);
+
+  // Drawn arrows and squares belong to the position they were drawn on.
+  useLayoutEffect(() => {
+    setNotes(NO_NOTES);
+    setDrawing(null);
+  }, [fen]);
 
   /** Who may pick up pieces now: real moves on your turn, premoves on the opponent's. */
   const actingColor = movable ?? premoveColor;
@@ -182,17 +234,56 @@ export function Board({
     setSelected(null);
   }
 
+  function capture(event: PointerEvent<HTMLDivElement>) {
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // The pointer was already released; the drag still works while it stays over the board.
+    }
+  }
+
+  /** Adds the arrow, or takes it away when the same arrow is drawn again. */
+  function toggleArrow(from: Square, to: Square, color: NoteColor) {
+    setNotes((n) => {
+      const same = n.arrows.find((a) => a.from === from && a.to === to);
+      const others = n.arrows.filter((a) => a !== same);
+      return { ...n, arrows: same?.color === color ? others : [...others, { from, to, color }] };
+    });
+  }
+
+  function toggleSquare(square: Square, color: NoteColor) {
+    setNotes((n) => {
+      const squares = { ...n.squares };
+      if (squares[square] === color) delete squares[square];
+      else squares[square] = color;
+      return { ...n, squares };
+    });
+  }
+
   function onPointerDown(event: PointerEvent<HTMLDivElement>) {
     if (promotion) return;
+    const { x, y } = pointIn(event);
+    const square = squareAtPoint(x, y, size, orientation);
     if (event.button === 2) {
-      // Right-click cancels premoves, as on chess.com.
       setSelected(null);
-      onCancelPremoves();
+      // While premoves are queued, a right-click cancels them, as on chess.com; otherwise it draws.
+      if (premoves.length > 0) {
+        onCancelPremoves();
+        return;
+      }
+      if (!square || drag) return;
+      capture(event);
+      setDrawing({
+        from: square,
+        to: square,
+        arrow: noteColor(event, "orange", "red"),
+        square: noteColor(event, "red", "orange"),
+      });
       return;
     }
     if (event.button !== 0) return;
-    const { x, y } = pointIn(event);
-    const square = squareAtPoint(x, y, size, orientation);
+    // A left click clears what was drawn, as on chess.com, and goes on to do what it would anyway.
+    if (notes.arrows.length > 0 || Object.keys(notes.squares).length > 0) setNotes(NO_NOTES);
     if (!square) return;
 
     if (selected && targets.has(square)) {
@@ -200,11 +291,7 @@ export function Board({
       return;
     }
     if (canPick(square)) {
-      try {
-        event.currentTarget.setPointerCapture(event.pointerId);
-      } catch {
-        // The pointer was already released; the drag still works while it stays over the board.
-      }
+      capture(event);
       setDrag({ from: square, x, y, deselectOnRelease: selected === square });
       setSelected(square);
       setHover(square);
@@ -215,6 +302,12 @@ export function Board({
   }
 
   function onPointerMove(event: PointerEvent<HTMLDivElement>) {
+    if (drawing) {
+      const { x, y } = pointIn(event);
+      const square = squareAtPoint(x, y, size, orientation);
+      if (square && square !== drawing.to) setDrawing({ ...drawing, to: square });
+      return;
+    }
     if (!drag) return;
     const { x, y } = pointIn(event);
     setDrag({ ...drag, x, y });
@@ -222,6 +315,13 @@ export function Board({
   }
 
   function onPointerUp(event: PointerEvent<HTMLDivElement>) {
+    if (drawing) {
+      if (event.button !== 2) return;
+      if (drawing.to === drawing.from) toggleSquare(drawing.from, drawing.square);
+      else toggleArrow(drawing.from, drawing.to, drawing.arrow);
+      setDrawing(null);
+      return;
+    }
     if (!drag) return;
     const { x, y } = pointIn(event);
     const target = squareAtPoint(x, y, size, orientation);
@@ -239,6 +339,11 @@ export function Board({
   const draggedPiece = drag ? placement.get(drag.from) : undefined;
   const premoveSquares = new Set(premoves.flatMap((p) => [p.from, p.to]));
   const boardStyle = { "--sq": `${squareSize}px` } as CSSProperties;
+  const drawn: BoardArrow[] = notes.arrows.map((a) => ({ from: a.from, to: a.to, color: NOTE_ARROW[a.color] }));
+  if (drawing && drawing.to !== drawing.from) {
+    drawn.push({ from: drawing.from, to: drawing.to, color: NOTE_ARROW[drawing.arrow] });
+  }
+  const allArrows = [...arrows, ...drawn];
 
   return (
     <div
@@ -251,6 +356,7 @@ export function Board({
       onPointerCancel={() => {
         setDrag(null);
         setHover(null);
+        setDrawing(null);
       }}
       onContextMenu={(e) => e.preventDefault()}
     >
@@ -261,14 +367,18 @@ export function Board({
         // Flipping reorders the squares, which would replay a finished slide; it only redraws.
         const slide = slides.orientation === orientation ? slides.moves.get(square) : undefined;
         const premoved = premoveSquares.has(square);
-        const highlighted =
-          !premoved &&
-          (square === selected || square === lastMove?.from || square === lastMove?.to || square === drag?.from);
+        const moved = square === lastMove?.from || square === lastMove?.to;
+        // A graded last move colors its squares with the grade, as chess.com's review does.
+        const tinted = !premoved && moved && badge !== null && square !== selected && square !== drag?.from;
+        const highlighted = !premoved && !tinted && (square === selected || moved || square === drag?.from);
+        const note = notes.squares[square];
         const classes = [
           "sq",
           isLightSquare(square) ? "light" : "dark",
           highlighted ? "highlight" : "",
+          tinted ? `tint tint-${badge!.kind}` : "",
           premoved ? "premove" : "",
+          note ? `note note-${note}` : "",
           marks.includes(square) ? "marked" : "",
           drag && hover === square ? "hover" : "",
           canPick(square) ? "grab" : "",
@@ -292,12 +402,22 @@ export function Board({
         );
       })}
 
-      {arrows.length > 0 && (
+      {allArrows.length > 0 && (
         <svg className="arrows" viewBox="0 0 8 8">
-          {arrows.map((arrow) => (
-            <ArrowShape key={`${arrow.from}${arrow.to}${arrow.color}`} arrow={arrow} orientation={orientation} />
+          {allArrows.map((arrow, i) => (
+            <ArrowShape key={`${arrow.from}${arrow.to}${arrow.color}${i}`} arrow={arrow} orientation={orientation} />
           ))}
         </svg>
+      )}
+
+      {badge && squareSize > 0 && (
+        // Keyed by move, so each new badge pops in.
+        <GradeBadge
+          key={`${lastMove?.from}${badge.square}${badge.kind}`}
+          badge={badge}
+          orientation={orientation}
+          squareSize={squareSize}
+        />
       )}
 
       {drag && draggedPiece && (
@@ -329,20 +449,56 @@ export function Board({
   );
 }
 
+/** A straight arrow, or an L-shaped one for a knight's jump, as chess.com draws them. */
 function ArrowShape({ arrow, orientation }: { arrow: BoardArrow; orientation: Color }) {
   const from = cellOf(arrow.from, orientation);
   const to = cellOf(arrow.to, orientation);
   const [x1, y1, x2, y2] = [from.col + 0.5, from.row + 0.5, to.col + 0.5, to.row + 0.5];
-  const length = Math.hypot(x2 - x1, y2 - y1);
-  const [ux, uy] = [(x2 - x1) / length, (y2 - y1) / length];
+  const [dx, dy] = [Math.abs(x2 - x1), Math.abs(y2 - y1)];
+  // A knight's arrow runs two squares along one side, then turns.
+  const knight = (dx === 1 && dy === 2) || (dx === 2 && dy === 1);
+  const [cx, cy] = knight ? (dy === 2 ? [x1, y2] : [x2, y1]) : [x1, y1];
+  const length = Math.hypot(x2 - cx, y2 - cy);
+  const [ux, uy] = [(x2 - cx) / length, (y2 - cy) / length];
   const head = 0.42;
   const [bx, by] = [x2 - ux * head, y2 - uy * head];
   const [px, py] = [-uy * 0.26, ux * 0.26];
+  const shaft = knight ? `${x1},${y1} ${cx},${cy} ${bx},${by}` : `${x1},${y1} ${bx},${by}`;
   return (
     <g opacity={0.85}>
-      <line x1={x1} y1={y1} x2={bx} y2={by} stroke={arrow.color} strokeWidth={0.18} strokeLinecap="round" />
+      <polyline
+        points={shaft}
+        fill="none"
+        stroke={arrow.color}
+        strokeWidth={0.18}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
       <polygon points={`${x2},${y2} ${bx + px},${by + py} ${bx - px},${by - py}`} fill={arrow.color} />
     </g>
+  );
+}
+
+/**
+ * The grade icon on the top-right corner of the square a piece moved to, as chess.com's review
+ * shows it. It stays inside the board on the edge files and ranks.
+ */
+function GradeBadge({ badge, orientation, squareSize }: { badge: BoardBadge; orientation: Color; squareSize: number }) {
+  const { col, row } = cellOf(badge.square, orientation);
+  const radius = squareSize * 0.19;
+  const left = Math.min((col + 0.95) * squareSize, 8 * squareSize - radius);
+  const top = Math.max((row + 0.05) * squareSize, radius);
+  const label = badge.kind === "book" ? "Book move" : CLASSIFICATION[badge.kind].label;
+  return (
+    <span
+      className={`board-badge ${badge.kind}`}
+      style={{ left, top, width: radius * 2, height: radius * 2 }}
+      role="img"
+      aria-label={label}
+      title={label}
+    >
+      {badge.kind === "book" ? <BookIcon /> : CLASSIFICATION[badge.kind].symbol}
+    </span>
   );
 }
 

@@ -122,16 +122,22 @@ export interface OpeningContext {
   line: string[];
 }
 
+/** `vip`: only VIP accounts may use the model; the server refuses it to others. */
 export const COACH_MODELS = [
-  { id: "claude-sonnet-5-5", label: "Sonnet 5.5", note: "balanced" },
-  { id: "claude-opus-5-5", label: "Opus 5.5", note: "most thorough, slower" },
-  { id: "claude-haiku-5-5", label: "Haiku 5.5", note: "fastest, cheapest" },
+  { id: "claude-sonnet-5-5", label: "Sonnet 5.5", note: "balanced", vip: false },
+  { id: "claude-opus-5-5", label: "Opus 5.5", note: "most thorough, slower", vip: true },
+  { id: "claude-haiku-5-5", label: "Haiku 5.5", note: "fastest, cheapest", vip: false },
 ] as const;
 
 export type CoachModelId = (typeof COACH_MODELS)[number]["id"];
 
 export function coachModelLabel(id: string): string {
   return COACH_MODELS.find((m) => m.id === id)?.label ?? id;
+}
+
+/** True when only VIP accounts may use the model. */
+export function isVipModel(id: string): boolean {
+  return COACH_MODELS.some((m) => m.id === id && m.vip);
 }
 
 export interface BotMoveResponse {
@@ -147,6 +153,8 @@ export interface StatusResponse {
 /** The signed-in account, from /api/auth/login and /api/auth/me. */
 export interface SessionResponse {
   username: string;
+  /** VIP accounts may use every coach model, Opus included. */
+  vip: boolean;
 }
 
 /** Bot strength: an approximate Chess.com rating, or full-strength Stockfish. */

@@ -20,12 +20,13 @@ const HELP: Record<Mode, string> = {
   learn:
     "Step through an opening with → or its book moves, and play your own moves anywhere to explore. Explain any move to learn the idea behind it.",
   review:
-    "Load one of your Chess.com games, or paste a game link or PGN. Every move of both sides is graded; My color sits at the bottom of the board.",
+    "Load one of your Chess.com games, or paste a game link or PGN. Every move of both sides is graded. Play moves for either side from any point to try another line, then go back to the game. My color sits at the bottom of the board.",
 };
 
-export function SetupCard({ draft, onChange, onNewGame }: Props) {
+/** The four modes, on the right of the board next to the move list. */
+export function ModePicker({ draft, onChange }: Omit<Props, "onNewGame">) {
   return (
-    <section className="card setup">
+    <section className="card mode-card">
       <div className="segmented" role="radiogroup" aria-label="Mode">
         {MODES.map(({ mode, label }) => (
           <button
@@ -39,7 +40,14 @@ export function SetupCard({ draft, onChange, onNewGame }: Props) {
           </button>
         ))}
       </div>
+    </section>
+  );
+}
 
+/** The mode's settings: your color, the bot's rating and New game. */
+export function SetupCard({ draft, onChange, onNewGame }: Props) {
+  return (
+    <section className="card setup">
       <div className="setup-row">
         <label>
           My color

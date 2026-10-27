@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { hashPassword, verifyPassword } from "./password";
-import { DEFAULT_ACCOUNT } from "./users";
+import { ownerAccount } from "./users";
 
 describe("hashPassword / verifyPassword", () => {
   it("accepts the right password and rejects others", async () => {
@@ -21,8 +21,9 @@ describe("hashPassword / verifyPassword", () => {
     }
   });
 
-  it("stores the built-in account as a valid scrypt hash", async () => {
-    expect(DEFAULT_ACCOUNT.passwordHash).toMatch(/^scrypt\$16384\$8\$1\$[\w-]{22}\$[\w-]{43}$/);
-    expect(await verifyPassword("not the password", DEFAULT_ACCOUNT.passwordHash)).toBe(false);
+  it("keeps the owner's default password as a valid scrypt hash", async () => {
+    const { passwordHash } = ownerAccount();
+    expect(passwordHash).toMatch(/^scrypt\$16384\$8\$1\$[\w-]{22}\$[\w-]{43}$/);
+    expect(await verifyPassword("not the password", passwordHash)).toBe(false);
   });
 });

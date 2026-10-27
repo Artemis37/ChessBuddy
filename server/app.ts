@@ -5,6 +5,8 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { z } from "zod";
 import {
   COACH_MODELS,
+  coachModelLabel,
+  isVipModel,
   type BotMoveResponse,
   type BotRating,
   type MoveGrade,
@@ -14,12 +16,12 @@ import {
 } from "../shared/types";
 import { CachedAnalyzer } from "./analysis/cache";
 import { AuthError, type Auth } from "./auth/auth";
-import { SESSION_COOKIE, SESSION_TTL_MS } from "./auth/session";
+import { SESSION_COOKIE, SESSION_TTL_MS, type SessionUser } from "./auth/session";
 import { gradeMove, type Analyzer } from "./analysis/grade";
 import { opponent, toMoveInput } from "./analysis/motifs";
 import { evaluatePosition } from "./analysis/position";
 import { MAX_PLAYABLE_RATING, MIN_PLAYABLE_RATING } from "./bot/strength";
-import { CoachError, type Coach } from "./coach";
+import { CoachError, type AskSubject, type Coach } from "./coach";
 
 interface EngineConnection {
   warmUp(): Promise<void>;
@@ -92,6 +94,17 @@ export function createApp({ analyzer: engine, bot, coach, auth, analysisDepth, d
   // The evaluation bar and grading often ask about the same position, so analyses are cached.
   const analyzer = new CachedAnalyzer(engine);
   const coachModels = [...new Set<string>([coach.defaultModel, ...COACH_MODELS.map((m) => m.id)])];
+  /** The default model for an account: COACH_MODEL, unless only VIP accounts may use it. */
+  const defaultModelFor = (user: SessionUser) =>
+    user.vip || !isVipModel(coach.defaultModel) ? coach.defaultModel : COACH_MODELS.find((m) => !m.vip)!.id;
+  /** The model a coach request uses. Only VIP accounts may use VIP models such as Opus. */
+  const modelFor = (requested: string | undefined, user: SessionUser) => {
+    if (!requested) return defaultModelFor(user);
+    if (isVipModel(requested) && !user.vip) {
+      throw new AuthError(403, `${coachModelLabel(requested)} is only for VIP accounts. Pick another model.`);
+    }
+    return requested;
+  };
   const engineErrors: Record<"analyzer" | "bot", string | undefined> = { analyzer: undefined, bot: undefined };
   const engineError = () => engineErrors.analyzer ?? engineErrors.bot;
 
@@ -125,7 +138,7 @@ export function createApp({ analyzer: engine, bot, coach, auth, analysisDepth, d
     );
     const session = await auth.signIn(body.username, body.password, req.ip ?? "unknown");
     res.cookie(SESSION_COOKIE, session.token, { ...cookieOptions(req.secure), maxAge: SESSION_TTL_MS });
-    res.json({ username: session.username } satisfies SessionResponse);
+    res.json({ username: session.username, vip: session.vip } satisfies SessionResponse);
   });
 
   app.post("/api/auth/logout", (req, res) => {
@@ -134,9 +147,9 @@ export function createApp({ analyzer: engine, bot, coach, auth, analysisDepth, d
   });
 
   app.get("/api/auth/me", (req, res) => {
-    const username = auth.sessionUser(req.headers.cookie);
-    if (!username) throw new AuthError(401, "Sign in first");
-    res.json({ username } satisfies SessionResponse);
+    const user = auth.sessionUser(req.headers.cookie);
+    if (!user) throw new AuthError(401, "Sign in first");
+    res.json({ username: user.username, vip: user.vip } satisfies SessionResponse);
   });
 
   // Public, and touches neither the engine nor the database: the deploy job polls it until the
@@ -145,17 +158,21 @@ export function createApp({ analyzer: engine, bot, coach, auth, analysisDepth, d
     res.json({ ok: true, version });
   });
 
-  app.use("/api", (req, _res, next) => {
-    if (!auth.sessionUser(req.headers.cookie)) throw new AuthError(401, "Sign in first");
+  // The session cookie carries the account's VIP flag, so routes check it without the database.
+  app.use("/api", (req, res, next) => {
+    const user = auth.sessionUser(req.headers.cookie);
+    if (!user) throw new AuthError(401, "Sign in first");
+    res.locals.user = user;
     next();
   });
+  const userOf = (res: Response): SessionUser => res.locals.user as SessionUser;
 
   app.get("/api/status", (_req, res) => {
     const status: StatusResponse = {
       engine: { ready: !engineError(), error: engineError() },
       coach: {
         ready: coach.configured,
-        defaultModel: coach.defaultModel,
+        defaultModel: defaultModelFor(userOf(res)),
         error: coach.configured ? undefined : "Add ANTHROPIC_API_KEY to .env and restart the server.",
       },
     };
@@ -191,13 +208,14 @@ export function createApp({ analyzer: engine, bot, coach, auth, analysisDepth, d
     res.json(result satisfies PositionEval);
   });
 
+  const grade = z.custom<MoveGrade>((v) => typeof v === "object" && v !== null, "Required");
   const explainBody = z.object({
-    grade: z.custom<MoveGrade>((v) => typeof v === "object" && v !== null, "Required"),
+    grade,
     history: z.array(z.string()),
     model: z
       .string()
       .refine((id) => coachModels.includes(id), `Must be one of ${coachModels.join(", ")}`)
-      .default(coach.defaultModel),
+      .optional(),
     perspective: z.enum(["mine", "opponent"]).default("mine"),
     opening: z
       .object({
@@ -215,9 +233,10 @@ export function createApp({ analyzer: engine, bot, coach, auth, analysisDepth, d
 
   app.post("/api/explain", async (req, res) => {
     const body = parse(explainBody, req.body);
+    const model = modelFor(body.model, userOf(res));
     res.json(
       await coach.explain(body.grade, body.history, {
-        model: body.model,
+        model,
         perspective: body.perspective,
         engine: lineEngine,
         opening: body.opening,
@@ -225,21 +244,38 @@ export function createApp({ analyzer: engine, bot, coach, auth, analysisDepth, d
     );
   });
 
+  // A question about a move (its grade), with or without its explanation, or about a position no
+  // move has led to yet (fen), such as the start of the game.
+  const askBody = explainBody
+    .extend({
+      grade: grade.optional(),
+      fen: fen.optional(),
+      explanation: z.object({ summary: z.string(), steps: z.array(z.string()).max(10), lesson: z.string() }).optional(),
+      thread: z
+        .array(z.object({ question: z.string().max(500), answer: z.string(), steps: z.array(z.string()).max(10) }))
+        .max(20)
+        .default([]),
+      question: z.string().trim().min(1, "Type a question").max(500, "Keep the question under 500 characters"),
+    })
+    .superRefine((body, ctx) => {
+      if (!body.grade && !body.fen) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["grade"], message: "Required" });
+    });
+
   app.post("/api/ask", async (req, res) => {
-    const body = parse(
-      explainBody.extend({
-        explanation: z.object({ summary: z.string(), steps: z.array(z.string()).max(10), lesson: z.string() }),
-        thread: z
-          .array(z.object({ question: z.string().max(500), answer: z.string(), steps: z.array(z.string()).max(10) }))
-          .max(20)
-          .default([]),
-        question: z.string().trim().min(1, "Type a question").max(500, "Keep the question under 500 characters"),
-      }),
-      req.body,
-    );
+    const body = parse(askBody, req.body);
+    const model = modelFor(body.model, userOf(res));
+    let subject: AskSubject;
+    if (body.grade) {
+      subject = { grade: body.grade };
+    } else {
+      const position = body.fen!;
+      if (new Chess(position).isGameOver()) throw new BadRequest("The game is over in this position");
+      const analysis = await withEngine("analyzer", () => analyzer.analyze(position, { multipv: 3, depth: analysisDepth }));
+      subject = { fen: position, analysis };
+    }
     res.json(
-      await coach.ask(body.grade, body.history, body.explanation, body.thread, body.question, {
-        model: body.model,
+      await coach.ask(subject, body.history, body.explanation ?? null, body.thread, body.question, {
+        model,
         perspective: body.perspective,
         engine: lineEngine,
         opening: body.opening,

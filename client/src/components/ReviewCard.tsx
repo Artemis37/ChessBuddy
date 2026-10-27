@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { gameAccuracy, gradeCounts } from "../../../shared/accuracy";
 import { readPgn } from "../../../shared/pgn";
 import type { Classification, Color } from "../../../shared/types";
@@ -12,28 +12,37 @@ import {
   type ApiGame,
   type GamePage,
 } from "../chesscom";
-import { CLASSIFICATION, colorName, type PlayedMove } from "../game";
+import { CLASSIFICATION, colorName, moveNumber, type PlayedMove } from "../game";
 import { dateLabel, scoreOf, sideOf, timeControlLabel, toReviewGame, type ReviewGame } from "../review";
 
 const chesscom = new ChessCom();
 const CLASSES = Object.keys(CLASSIFICATION) as Classification[];
 const OUTCOME_LABEL = { won: "Won", lost: "Lost", drawn: "Draw" } as const;
+/** Chess.com's public API has no lookup by game, so a link is found among a player's games. */
+const LINK_NEEDS_USERNAME =
+  "Chess.com can't look a game up from its link alone, so ChessBuddy finds it among a player's games. Type the Chess.com username of either player above, or paste the game's PGN (Share → PGN on Chess.com).";
 
 interface Props {
   /** The game being reviewed, or null before one is loaded. */
   game: ReviewGame | null;
-  /** The moves in the move list; the game's own come first. */
+  /** The game's own moves, with their grades, wherever the move list has gone since. */
+  gameMoves: PlayedMove[];
+  /** The moves in the move list. */
   moves: PlayedMove[];
+  /** Where the move list leaves the game: the first move that differs, or past its end; null on the game. */
+  leftAt: number | null;
   myColor: Color;
   /** Grading stopped because a move couldn't be analyzed. */
   stopped: boolean;
   /** Loads a game, with the side the player had in it when the username tells. */
   onLoad: (game: ReviewGame, myColor: Color | null) => void;
   onResume: () => void;
+  /** Puts the game's moves back from where the move list left them. */
+  onBackToGame: () => void;
 }
 
 /** Reviewing a game: pick one of your Chess.com games or paste one, then follow its grading. */
-export function ReviewCard({ game, moves, myColor, stopped, onLoad, onResume }: Props) {
+export function ReviewCard({ game, gameMoves, moves, leftAt, myColor, stopped, onLoad, onResume, onBackToGame }: Props) {
   const [choosing, setChoosing] = useState(false);
   // Kept while the card is open, so picking another game doesn't ask for the username again.
   const [username, setUsername] = useState("");
@@ -57,12 +66,57 @@ export function ReviewCard({ game, moves, myColor, stopped, onLoad, onResume }: 
   return (
     <GameSummary
       game={game}
-      moves={moves.slice(0, game.moves.length)}
+      moves={gameMoves}
       myColor={myColor}
       stopped={stopped}
       onResume={onResume}
       onChange={() => setChoosing(true)}
+      branch={
+        leftAt === null ? null : <BranchStatus leftAt={leftAt} gameMoves={gameMoves} moves={moves} onBack={onBackToGame} />
+      }
     />
+  );
+}
+
+/** Where the move list left the game, and the way back to it. */
+function BranchStatus({
+  leftAt,
+  gameMoves,
+  moves,
+  onBack,
+}: {
+  leftAt: number;
+  gameMoves: PlayedMove[];
+  moves: PlayedMove[];
+  onBack: () => void;
+}) {
+  const played = moves[leftAt];
+  const inGame = gameMoves[leftAt];
+  return (
+    <div className="branch">
+      <p className="study-status">
+        {inGame && played ? (
+          <>
+            You left the game with{" "}
+            <strong>
+              {moveNumber(leftAt)} {played.san}
+            </strong>
+            ; it went{" "}
+            <strong>
+              {moveNumber(leftAt)} {inGame.san}
+            </strong>
+            .
+          </>
+        ) : (
+          <>You're playing on from the end of the game.</>
+        )}
+      </p>
+      <div className="actions">
+        <button className="primary" onClick={onBack}>
+          Back to the game
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -114,7 +168,7 @@ function GamePicker({
       const text = pasted.trim();
       const id = /\s/.test(text) ? null : gameLinkId(text);
       if (id) {
-        if (!username.trim()) throw new Error("Type your Chess.com username above: the link is looked up among your games.");
+        if (!username.trim()) throw new Error(LINK_NEEDS_USERNAME);
         const found =
           listed?.games.find((g) => gameLinkId(g.url) === id) ?? (await chesscom.findGame(username, text));
         onLoad(reviewGameOf(found), playerColor(found, username));
@@ -197,6 +251,7 @@ function GamePicker({
         placeholder="https://www.chess.com/game/live/… or the PGN from Share → PGN"
         onChange={(e) => setPasted(e.target.value)}
       />
+      <p className="muted small">A link also needs either player's username above. A PGN needs nothing else.</p>
       <div className="actions">
         <button className="primary" onClick={loadPasted} disabled={busy !== null || !pasted.trim()}>
           {busy === "pasted" ? "Loading…" : "Load game"}
@@ -249,6 +304,7 @@ function GameSummary({
   stopped,
   onResume,
   onChange,
+  branch,
 }: {
   game: ReviewGame;
   /** The game's own moves. */
@@ -257,6 +313,8 @@ function GameSummary({
   stopped: boolean;
   onResume: () => void;
   onChange: () => void;
+  /** Shown when the move list has left the game. */
+  branch: ReactNode;
 }) {
   const grades = moves.flatMap((m) => (m.grade ? [m.grade] : []));
   const done = grades.length === moves.length;
@@ -299,6 +357,7 @@ function GameSummary({
         <strong>{scoreOf(game.result)}</strong>
         {game.termination && ` · ${game.termination}`}
       </p>
+      {branch}
 
       {!done &&
         (stopped ? (
