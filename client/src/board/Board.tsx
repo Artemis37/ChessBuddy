@@ -24,6 +24,8 @@ export interface BoardArrow {
 export interface BoardBadge {
   square: Square;
   kind: Classification | "book";
+  /** A graded book move: the book icon sits beside its grade's. */
+  book?: boolean;
 }
 
 /** Colors of the arrows and squares you draw with the right mouse button, as on chess.com. */
@@ -413,7 +415,7 @@ export function Board({
       {badge && squareSize > 0 && (
         // Keyed by move, so each new badge pops in.
         <GradeBadge
-          key={`${lastMove?.from}${badge.square}${badge.kind}`}
+          key={`${lastMove?.from}${badge.square}${badge.kind}${badge.book ? "-book" : ""}`}
           badge={badge}
           orientation={orientation}
           squareSize={squareSize}
@@ -481,25 +483,30 @@ function ArrowShape({ arrow, orientation }: { arrow: BoardArrow; orientation: Co
 
 /**
  * The grade icon on the top-right corner of the square a piece moved to, as chess.com's review
- * shows it. It stays inside the board on the edge files and ranks.
+ * shows it, with the book icon to its left for a graded book move. They stay inside the board
+ * on the edge files and ranks.
  */
 function GradeBadge({ badge, orientation, squareSize }: { badge: BoardBadge; orientation: Color; squareSize: number }) {
   const { col, row } = cellOf(badge.square, orientation);
   const radius = squareSize * 0.19;
   const left = Math.min((col + 0.95) * squareSize, 8 * squareSize - radius);
   const top = Math.max((row + 0.05) * squareSize, radius);
-  const label = badge.kind === "book" ? "Book move" : CLASSIFICATION[badge.kind].label;
-  return (
-    <span
-      className={`board-badge ${badge.kind}`}
-      style={{ left, top, width: radius * 2, height: radius * 2 }}
-      role="img"
-      aria-label={label}
-      title={label}
-    >
-      <GradeIcon kind={badge.kind} />
-    </span>
-  );
+  const kinds = badge.book && badge.kind !== "book" ? (["book", badge.kind] as const) : [badge.kind];
+  return kinds.map((kind, i) => {
+    const label = kind === "book" ? "Book move" : CLASSIFICATION[kind].label;
+    return (
+      <span
+        key={kind}
+        className={`board-badge ${kind}`}
+        style={{ left: left - (kinds.length - 1 - i) * radius * 2.1, top, width: radius * 2, height: radius * 2 }}
+        role="img"
+        aria-label={label}
+        title={label}
+      >
+        <GradeIcon kind={kind} />
+      </span>
+    );
+  });
 }
 
 function PromotionPicker({

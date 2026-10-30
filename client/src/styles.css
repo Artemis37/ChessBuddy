@@ -1653,6 +1653,7 @@ select {
 
 .move-grade {
   display: inline-flex;
+  gap: 2px;
 }
 
 .tag.best {

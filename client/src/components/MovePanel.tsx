@@ -114,11 +114,11 @@ export function MovePanel({
   const title = `${moveNumber(index)} ${move.san}`;
   const owner = learning
     ? `${colorName(move.color)} · ${move.book ? "book move" : "off the book"}`
-    : mine
-      ? "Your move"
-      : bothSides && !reviewing
-        ? `The other side's move (${colorName(move.color)})`
-        : `Your opponent's move (${colorName(move.color)})`;
+    : (mine
+        ? "Your move"
+        : bothSides && !reviewing
+          ? `The other side's move (${colorName(move.color)})`
+          : `Your opponent's move (${colorName(move.color)})`) + (reviewing && move.book ? " · book move" : "");
   const busy = Boolean(move.asking) || Boolean(move.explaining) || Boolean(move.grading);
   const explainActions = (
     <div className="actions">

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  bookPlies,
   divergence,
   familyName,
+  lineForGame,
   nameMatches,
   openingFamilies,
   openingFor,
@@ -11,6 +13,7 @@ import {
   type OpeningBook,
 } from "./openings";
 
+const START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const AFTER_E4 = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1";
 const AFTER_E4_C5 = "rnbqkbnr/pp1ppppp/8/2p5/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2";
 const AFTER_E4_C5_F4 = "rnbqkbnr/pp1ppppp/8/2p5/4PP2/8/PPPP2PP/RNBQKBNR b KQkq - 0 2";
@@ -122,5 +125,69 @@ describe("divergence", () => {
 
   it("is the index of the first move off the line", () => {
     expect(divergence(line, ["e4", "c5", "Nc3", "Nc6"])).toBe(2);
+  });
+});
+
+describe("bookPlies", () => {
+  const next = {
+    [positionKey(START)]: ["e4", "d4"],
+    [positionKey(AFTER_E4)]: ["c5", "e5"],
+    [positionKey(AFTER_E4_C5)]: ["Nf3", "f4"],
+  };
+
+  it("counts the first moves the book lists from their positions", () => {
+    const moves = [
+      { san: "e4", fenBefore: START },
+      { san: "c5", fenBefore: AFTER_E4 },
+      { san: "f4", fenBefore: AFTER_E4_C5 },
+      { san: "g6", fenBefore: AFTER_E4_C5_F4 },
+    ];
+    expect(bookPlies(moves, next)).toBe(3);
+  });
+
+  it("stops at the first move off the book, even if a later one is listed", () => {
+    const moves = [
+      { san: "e4", fenBefore: START },
+      { san: "a6", fenBefore: AFTER_E4 },
+      { san: "Nf3", fenBefore: AFTER_E4_C5 },
+    ];
+    expect(bookPlies(moves, next)).toBe(1);
+  });
+
+  it("is 0 when the first move is off the book, or there are no moves", () => {
+    expect(bookPlies([{ san: "a3", fenBefore: START }], next)).toBe(0);
+    expect(bookPlies([], next)).toBe(0);
+  });
+});
+
+describe("lineForGame", () => {
+  const lines = readLines([
+    ["B20", "Sicilian Defense", "e4 c5"],
+    ["B27", "Sicilian Defense", "e4 c5 Nf3"],
+    ["B21", "Sicilian Defense: McDonnell Attack", "e4 c5 f4"],
+    ["B90", "Sicilian Defense: Najdorf Variation", "e4 c5 Nf3 d6 d4 cxd4 Nxd4 Nf6 Nc3 a6"],
+    ["B90", "Sicilian Defense: Najdorf Variation", "Nf3 c5 e4 d6 d4 cxd4 Nxd4 Nf6 Nc3 a6"],
+  ]);
+  const najdorf = "e4 c5 Nf3 d6 d4 cxd4 Nxd4 Nf6 Nc3 a6 Be3".split(" ");
+
+  it("picks the reached opening's line in the game's move order", () => {
+    expect(lineForGame(lines, najdorf, "Sicilian Defense: Najdorf Variation")?.moves[0]).toBe("e4");
+    const viaNf3 = ["Nf3", ...najdorf.slice(1, 2), "e4", ...najdorf.slice(3)];
+    expect(lineForGame(lines, viaNf3, "Sicilian Defense: Najdorf Variation")?.moves[0]).toBe("Nf3");
+  });
+
+  it("takes the line of that name that follows the game furthest, the shorter one on a tie", () => {
+    expect(lineForGame(lines, ["e4", "c5", "Nf3", "Nc6"], "Sicilian Defense")?.moves).toEqual(["e4", "c5", "Nf3"]);
+    expect(lineForGame(lines, ["e4", "c5", "Nc3"], "Sicilian Defense")?.moves).toEqual(["e4", "c5"]);
+  });
+
+  it("without a line of that name, takes the line that follows the game furthest", () => {
+    expect(lineForGame(lines, ["e4", "c5", "f4", "e6"], null)?.name).toBe("Sicilian Defense: McDonnell Attack");
+    expect(lineForGame(lines, ["e4", "c5", "f4", "e6"], "Not a line")?.name).toBe("Sicilian Defense: McDonnell Attack");
+  });
+
+  it("is null when no line starts like the game", () => {
+    expect(lineForGame(lines, ["a3"], null)).toBeNull();
+    expect(lineForGame([], ["e4"], null)).toBeNull();
   });
 });

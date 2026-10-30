@@ -1,7 +1,9 @@
 import { Chess, type Square } from "chess.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  bookPlies,
   divergence,
+  lineForGame,
   openingFor,
   positionKey,
   readLines,
@@ -43,6 +45,7 @@ const BEST_ARROW = "rgba(129, 182, 76, 0.95)";
 /** A book move under the pointer while learning an opening. */
 const BOOK_ARROW = "rgba(82, 155, 220, 0.85)";
 const NO_BOOK_MOVES: Record<string, string[]> = {};
+const NO_MOVES: PlayedMove[] = [];
 /** chess.com's arrow color, for the attacks and threats an explanation points out. */
 const STEP_ARROW = "rgba(255, 170, 0, 0.9)";
 /** Pause before a step's first move, so the jump to its starting position is seen first. */
@@ -154,7 +157,7 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
   const [walkthrough, setWalkthrough] = useState<Walkthrough | null>(null);
   /** Questions about the starting position, which has no move to keep them. */
   const [startQuestions, setStartQuestions] = useState<Questions>({});
-  /** Opening lines and book moves, loaded the first time you learn openings. */
+  /** Opening lines and book moves, loaded the first time you learn openings or review a game. */
   const [library, setLibrary] = useState<OpeningLibrary | null>(null);
   /** The opening line being learned. */
   const [study, setStudy] = useState<OpeningLine | null>(null);
@@ -163,6 +166,11 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
   const [soundOn, setSoundOn] = useState(() => !isMuted());
   /** The game being reviewed; its moves are the line. */
   const [review, setReview] = useState<ReviewGame | null>(null);
+  /**
+   * Learning the opening of the game under review: the game's own moves, with their grades, kept
+   * for the Review tab to bring back while the line is the opening's. Null otherwise.
+   */
+  const [reviewLine, setReviewLine] = useState<PlayedMove[] | null>(null);
   const [tabHidden, setTabHidden] = useState(() => document.hidden);
   /** Review grades waiting for the server, including ones for a game since replaced. */
   const reviewInFlight = useRef(0);
@@ -186,6 +194,10 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
   const learning = settings.mode === "learn";
   const reviewed = settings.mode === "review" ? review : null;
   const reviewing = reviewed !== null;
+  /** Learning the opening of the game under review; its grading goes on meanwhile. */
+  const learningGame = learning && reviewLine !== null;
+  /** The reviewed game's own moves: the line while reviewing it, kept aside while learning its opening. */
+  const gameMoves = reviewing ? line : (reviewLine ?? NO_MOVES);
   // Playing both sides you move every piece.
   const humanTurn = settings.mode === "both" || turn === settings.myColor;
   /** The bot's quiet moves, or the opponent's in a reviewed game, sound different from yours, as on chess.com. */
@@ -201,12 +213,15 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
     : reviewing
       ? (divergence(sansOf(line), sansOf(moves)) ?? (moves.length > line.length ? line.length : null))
       : null;
-  /** Reviewing a game grades the move list's moves, then the game's moves the list has left. */
+  /**
+   * Reviewing a game, or learning its opening, grades the move list's moves, then the game's
+   * moves the list has left.
+   */
   const reviewQueue = useMemo(() => {
-    if (!reviewing) return [];
+    if (!reviewing && !learningGame) return [];
     const listed = new Set(moves.map((m) => m.id));
-    return [...moves, ...line.filter((m) => !listed.has(m.id))];
-  }, [reviewing, moves, line]);
+    return [...moves, ...gameMoves.filter((m) => !listed.has(m.id))];
+  }, [reviewing, learningGame, moves, gameMoves]);
   /** A move of the reviewed game couldn't be graded, so grading the rest waits for Resume. */
   const reviewStopped = reviewQueue.some((m) => m.gradeError);
   const canUseModel = (id: string) => user.vip || !isVipModel(id);
@@ -247,19 +262,21 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
       .then(setBook, () => setBook({}));
   }, []);
 
+  // Reviewing a game needs the book moves too, to mark the game's.
   useEffect(() => {
-    if (draft.mode !== "learn" || library) return;
+    if ((draft.mode !== "learn" && draft.mode !== "review") || library) return;
     fetch("/opening-lines.json")
       .then((r) => r.json())
       .then(setLibrary, () => setLibrary({ lines: [], next: {} }));
   }, [draft.mode, library]);
   const openingLines = useMemo(() => (library ? readLines(library.lines) : null), [library]);
 
-  /** Changes a move wherever it is: in the move list, and in the line it may belong to. */
+  /** Changes a move wherever it is: in the move list, and in the line or the game kept aside it may belong to. */
   const editMove = useCallback((id: number, change: (move: PlayedMove) => PlayedMove) => {
     const apply = (list: PlayedMove[]) => (list.some((m) => m.id === id) ? list.map((m) => (m.id === id ? change(m) : m)) : list);
     setMoves(apply);
     setLine(apply);
+    setReviewLine((list) => list && apply(list));
   }, []);
 
   const updateMove = useCallback(
@@ -335,16 +352,16 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
   /** Moves graded at once while reviewing a game: as many as the server has grading engines (GRADING_ENGINES). */
   const reviewParallel = status?.engine.gradingEngines ?? 1;
 
-  // Reviewing a game grades every move, reviewParallel at a time so the engine isn't swamped,
-  // the one on the board first, then the rest of the move list and the game's moves it has
-  // left. None start while the tab is hidden, and a failure stops the queue until Resume. Each
-  // grade analyzes the position after its move the way the next grade needs, so the server's
-  // cache answers that grade's first search.
+  // Reviewing a game, or learning its opening, grades every move, reviewParallel at a time so
+  // the engine isn't swamped, the one on the board first, then the rest of the move list and the
+  // game's moves it has left. None start while the tab is hidden, and a failure stops the queue
+  // until Resume. Each grade analyzes the position after its move the way the next grade needs,
+  // so the server's cache answers that grade's first search.
   useEffect(() => {
-    if (!reviewing || tabHidden || reviewStopped) return;
+    if ((!reviewing && !learningGame) || tabHidden || reviewStopped) return;
     for (const index of nextToGrade(reviewQueue, shownCount - 1, reviewParallel - reviewInFlight.current)) {
       const move = reviewQueue[index];
-      const sequence = index < moves.length ? moves : line;
+      const sequence = index < moves.length ? moves : gameMoves;
       const hasNext = sequence.findIndex((m) => m.id === move.id) < sequence.length - 1;
       reviewInFlight.current++;
       grade(move, hasNext).finally(() => {
@@ -352,7 +369,7 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
         setReviewSettled((n) => n + 1);
       });
     }
-  }, [reviewing, tabHidden, reviewStopped, reviewQueue, moves, line, shownCount, grade, reviewSettled, reviewParallel]);
+  }, [reviewing, learningGame, tabHidden, reviewStopped, reviewQueue, moves, gameMoves, shownCount, grade, reviewSettled, reviewParallel]);
 
   // The bot replies whenever it is its turn.
   useEffect(() => {
@@ -456,14 +473,17 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
     setSettings(draft);
     setStudy(null);
     setReview(null);
+    setReviewLine(null);
     restart([], false);
   };
 
-  /** Starts learning an opening line from its first position, with its moves ready to step through. */
+  /**
+   * Starts learning an opening line from its first position, with its moves ready to step
+   * through. Learning the opening of a reviewed game, the game stays for the Review tab.
+   */
   const startStudy = (studied: OpeningLine) => {
     setSettings({ ...draft, mode: "learn" });
     setStudy(studied);
-    setReview(null);
     restart(lineMoves(studied.moves, nextId), true);
   };
 
@@ -476,8 +496,43 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
     setDraft(next);
     setSettings(next);
     setReview(loaded);
+    setReviewLine(null);
     setStudy(null);
     restart(lineMoves(loaded.moves.map((m) => m.san), nextId, "graded"), true);
+  };
+
+  /**
+   * Reviewing a game, learns its opening: the line of the opening its moves reach, with the move
+   * list and the position shown kept and their book moves marked. The game waits for the Review tab.
+   */
+  const learnGameOpening = () => {
+    const reached = book ? (openingFor(moves.map((m) => m.fenAfter), book)?.name ?? null) : null;
+    const studied = openingLines ? lineForGame(openingLines, sansOf(moves), reached) : null;
+    const inBook = library ? bookPlies(moves, library.next) : 0;
+    setSettings((s) => ({ ...s, mode: "learn" }));
+    setStudy(studied);
+    setReviewLine(line);
+    setLine(studied ? lineMoves(studied.moves, nextId) : []);
+    setMoves(moves.map((m, i) => ({ ...m, book: i < inBook })));
+    setWalkthrough(null);
+  };
+
+  /**
+   * Learning the opening of the game under review, goes back to reviewing the game, with the
+   * move list and the position shown kept; if moves were taken back on the game, its moves after
+   * them come back. Moves not graded yet, such as book moves played from the opening's line,
+   * join the grading.
+   */
+  const backToReview = () => {
+    if (!reviewLine) return;
+    const list = moves.map((m) => (m.graded ? m : { ...m, graded: true }));
+    const onGame = list.length < reviewLine.length && divergence(sansOf(reviewLine), sansOf(list)) === null;
+    setSettings((s) => ({ ...s, mode: "review" }));
+    setLine(reviewLine);
+    setReviewLine(null);
+    setMoves(onGame ? [...list, ...reviewLine.slice(list.length)] : list);
+    if (onGame) setViewPly(shownCount);
+    setWalkthrough(null);
   };
 
   /** Clears the failures that stopped grading the reviewed game, so the queue tries those moves again. */
@@ -490,6 +545,10 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
     // While learning an opening or reviewing a game, your color only turns the board and decides
     // whose moves are yours, so it applies at once.
     if (next.mode === settings.mode && (learning || reviewing)) setSettings((s) => ({ ...s, myColor: next.myColor }));
+    // With a game loaded, the Learn openings and Review a game tabs switch between learning its
+    // opening and reviewing it.
+    else if (next.mode === "learn" && reviewing) learnGameOpening();
+    else if (next.mode === "review" && learningGame) backToReview();
   };
 
   const retry = (index: number) => rewind(moves.length - index);
@@ -682,8 +741,17 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
     if (!soundOn) playSound("move");
   };
 
+  /**
+   * The moves as the list, the board and the panel show them. Reviewing a game, its first moves
+   * are book moves up to the first one off the book, as on chess.com, and keep their grades.
+   */
+  const displayMoves = useMemo(() => {
+    if (!reviewing || !library) return moves;
+    const inBook = bookPlies(moves, library.next);
+    return moves.map((m, i) => (Boolean(m.book) === i < inBook ? m : { ...m, book: i < inBook }));
+  }, [reviewing, library, moves]);
   const displayFen = shownCount === 0 ? START_FEN : moves[shownCount - 1].fenAfter;
-  const shownMove = shownCount > 0 ? moves[shownCount - 1] : null;
+  const shownMove = shownCount > 0 ? displayMoves[shownCount - 1] : null;
   /** Learning an opening or reviewing a game, the panel follows the board even through ungraded moves. */
   const followsBoard = learning || reviewing;
   const pickedIndex = pickedId === null ? -1 : moves.findIndex((m) => m.id === pickedId);
@@ -698,7 +766,7 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
       : pickedIndex >= 0
         ? pickedIndex
         : (lastGradedIndex(moves) ?? (moves.length > 0 ? moves.length - 1 : null));
-  const panelMove = panelIndex === null ? undefined : moves[panelIndex];
+  const panelMove = panelIndex === null ? undefined : displayMoves[panelIndex];
 
   /**
    * Learning an opening or reviewing a game, you move from whatever position the board shows:
@@ -768,10 +836,11 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
     return map;
   }, [moves, line]);
   const evaluation = gradeEvals.get(displayFen) ?? evals[displayFen] ?? null;
-  // Reviewing a game, a move waiting in the grading queue will bring its positions' evaluations.
+  // Reviewing a game, or learning its opening, a move waiting in the grading queue will bring its
+  // positions' evaluations.
   const gradeComing = moves.some(
     (m) =>
-      (m.grading || (reviewing && !reviewStopped && m.graded && !m.grade)) &&
+      (m.grading || ((reviewing || learningGame) && !reviewStopped && m.graded && !m.grade)) &&
       (m.fenAfter === displayFen || m.fenBefore === displayFen),
   );
   useEffect(() => {
@@ -819,9 +888,10 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
   }
   const marks = walkStep && walkView?.done ? walkStep.marks : [];
   // Learning an opening or reviewing a game, the move's grade icon sits on its square, as in
-  // chess.com's review: the same icons as the move list.
+  // chess.com's review: the same icons as the move list, a graded book move's two of them.
   const badgeKind = followsBoard && !walkView && shownMove ? (shownMove.grade?.classification ?? (shownMove.book ? "book" : null)) : null;
-  const badge: BoardBadge | null = shownMove && badgeKind ? { square: toMove(shownMove.uci).to, kind: badgeKind } : null;
+  const badge: BoardBadge | null =
+    shownMove && badgeKind ? { square: toMove(shownMove.uci).to, kind: badgeKind, book: shownMove.book } : null;
 
   // Learning an opening or reviewing a game, the side to move in the position shown may move,
   // wherever that is in the list.
@@ -840,14 +910,16 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
   const gameEnd = atReviewEnd && reviewed.termination ? sentence(reviewed.termination) : null;
   const endText = live ? (gameEnd ?? result) : null;
 
-  const reviewedPlayer = (color: Color) => (reviewed ? reviewed[color === "w" ? "white" : "black"] : null);
+  /** Reviewing a game or learning its opening, the game's players. */
+  const gamePlayers = reviewing || learningGame ? review : null;
+  const reviewedPlayer = (color: Color) => (gamePlayers ? gamePlayers[color === "w" ? "white" : "black"] : null);
   const playerName = (color: Color) =>
     reviewedPlayer(color)?.name ??
     (color === settings.myColor ? "You" : settings.mode === "bot" ? "Stockfish" : colorName(color));
   const playerBar = (color: Color) => {
     const mine = color === settings.myColor;
     const rating = reviewedPlayer(color)?.rating;
-    const detail = reviewing
+    const detail = gamePlayers
       ? rating
         ? `${rating}`
         : colorName(color)
@@ -1039,7 +1111,7 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
         <aside className="right-col" aria-label="Mode and moves">
           <ModePicker draft={draft} onChange={changeDraft} />
           <MoveList
-            moves={moves}
+            moves={displayMoves}
             current={shownCount - 1}
             opening={opening}
             white={playerName("w")}

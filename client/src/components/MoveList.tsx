@@ -122,38 +122,28 @@ function MoveCell({
 }) {
   const cls = move.grade?.classification;
   const pending = !cls && !move.gradeError && (move.grading || (move.graded && !move.grade));
+  // A graded book move shows both: that it's theory, and how good it is.
+  const labels = [...(move.book ? ["Book move"] : []), ...(cls ? [CLASSIFICATION[cls].label] : [])];
   return (
     <button
       ref={buttonRef}
       className={`move-cell ${selected ? "selected" : ""}`}
       onClick={onSelect}
-      title={cls ? CLASSIFICATION[cls].label : undefined}
+      title={labels.join(" · ") || undefined}
       aria-current={selected ? "step" : undefined}
-      aria-label={
-        cls
-          ? `${move.san}, ${CLASSIFICATION[cls].label}`
-          : move.gradeError
-            ? `${move.san}, analysis failed`
-            : move.book
-              ? `${move.san}, book move`
-              : move.san
-      }
+      aria-label={[move.san, ...labels, ...(move.gradeError ? ["analysis failed"] : [])].join(", ")}
     >
       <span>{move.san}</span>
-      {move.book && !cls && !pending && (
-        <span className="move-grade" title="Book move">
-          <GradeIcon kind="book" />
+      {(move.book || cls) && (
+        <span className="move-grade">
+          {move.book && <GradeIcon kind="book" />}
+          {cls && <GradeIcon kind={cls} />}
         </span>
       )}
       {pending && <span className="badge pending" aria-label="Analyzing" />}
       {move.gradeError && (
         <span className="badge error" title="Analysis failed">
           ×
-        </span>
-      )}
-      {cls && (
-        <span className="move-grade">
-          <GradeIcon kind={cls} />
         </span>
       )}
     </button>

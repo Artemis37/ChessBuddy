@@ -100,3 +100,34 @@ export function divergence(line: string[], played: string[]): number | null {
   for (let i = 0; i < shared; i++) if (line[i] !== played[i]) return i;
   return null;
 }
+
+/**
+ * How many of a game's first moves are book moves: each one listed in `next` for the position
+ * it was played from. As on chess.com, the moves after the first one off the book aren't book
+ * moves, even if they come back to a book position.
+ */
+export function bookPlies(moves: { san: string; fenBefore: string }[], next: Record<string, string[]>): number {
+  let count = 0;
+  while (count < moves.length && next[positionKey(moves[count].fenBefore)]?.includes(moves[count].san)) count++;
+  return count;
+}
+
+/**
+ * The line to learn a game's opening from: of the lines named after the opening the game
+ * reached, the one that follows its moves furthest, the shorter of two that follow them as far.
+ * Without a line of that name, the line that follows the game furthest, or null if none starts
+ * like it.
+ */
+export function lineForGame(lines: OpeningLine[], played: string[], reached: string | null): OpeningLine | null {
+  const named = lines.filter((line) => line.name === reached);
+  let best: OpeningLine | null = null;
+  let bestShared = 0;
+  for (const line of named.length > 0 ? named : lines) {
+    const shared = divergence(line.moves, played) ?? Math.min(line.moves.length, played.length);
+    if (!best || shared > bestShared || (shared === bestShared && line.moves.length < best.moves.length)) {
+      best = line;
+      bestShared = shared;
+    }
+  }
+  return named.length > 0 || bestShared > 0 ? best : null;
+}
