@@ -1,4 +1,4 @@
-import { useEffect, useRef, type Ref } from "react";
+import { useEffect, useRef, type ReactNode, type Ref } from "react";
 import type { Opening } from "../../../shared/openings";
 import { CLASSIFICATION, type PlayedMove } from "../game";
 import { GradeIcon } from "./icons";
@@ -35,22 +35,8 @@ export function MoveList({
 }: Props) {
   const tableRef = useRef<HTMLDivElement>(null);
   const currentRef = useRef<HTMLButtonElement>(null);
-  // Keeps the current move in view by scrolling the list alone. scrollIntoView would also scroll
-  // every container around it, the page included, and move the buttons under the mouse.
   useEffect(() => {
-    const table = tableRef.current;
-    const cell = currentRef.current;
-    if (!table) return;
-    if (!cell) {
-      if (current < 0) table.scrollTop = 0;
-      return;
-    }
-    const row = (cell.closest<HTMLElement>(".move-row") ?? cell).getBoundingClientRect();
-    const top = row.top - table.getBoundingClientRect().top + table.scrollTop;
-    if (top < table.scrollTop) table.scrollTop = top;
-    else if (top + row.height > table.scrollTop + table.clientHeight) {
-      table.scrollTop = top + row.height - table.clientHeight;
-    }
+    if (tableRef.current) keepInView(tableRef.current, currentRef.current, ".move-row", current);
   }, [current, moves.length]);
 
   const rows: { number: number; white?: number; black?: number }[] = [];
@@ -105,6 +91,85 @@ export function MoveList({
           <NavIcon kind="last" />
         </button>
       </nav>
+    </section>
+  );
+}
+
+/**
+ * Keeps the current move in view by scrolling the list alone. scrollIntoView would also scroll
+ * every container around it, the page included, and move the buttons under the mouse.
+ */
+function keepInView(list: HTMLElement, cell: HTMLElement | null, row: string, current: number) {
+  if (!cell) {
+    if (current < 0) list.scrollTop = 0;
+    return;
+  }
+  const box = (cell.closest<HTMLElement>(row) ?? cell).getBoundingClientRect();
+  const top = box.top - list.getBoundingClientRect().top + list.scrollTop;
+  if (top < list.scrollTop) list.scrollTop = top;
+  else if (top + box.height > list.scrollTop + list.clientHeight) {
+    list.scrollTop = top + box.height - list.clientHeight;
+  }
+}
+
+interface FlowProps extends Omit<Props, "opening" | "onPrevious" | "onNext"> {
+  /** More buttons beside First and Last, such as Undo. */
+  tools?: ReactNode;
+}
+
+/**
+ * The move list on a phone, as phone chess apps show it: the moves wrap line after line, each
+ * White move after its number. Back and Forward are on the toolbar below, First and Last here.
+ */
+export function MoveFlow({ moves, current, white, black, score, onSelect, onFirst, onLast, tools }: FlowProps) {
+  const flowRef = useRef<HTMLDivElement>(null);
+  const currentRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (flowRef.current) keepInView(flowRef.current, currentRef.current, ".move-pair", current);
+  }, [current, moves.length]);
+
+  const pairs: number[][] = [];
+  moves.forEach((_, i) => {
+    if (i % 2 === 0) pairs.push([i]);
+    else pairs[pairs.length - 1].push(i);
+  });
+  const atStart = current < 0;
+  const atEnd = current >= moves.length - 1;
+
+  return (
+    <section className="card moves move-flow-card">
+      <div className="game-title">
+        <span className="flow-players">
+          <strong>{white}</strong> - <strong>{black}</strong> <span className="score">{score}</span>
+        </span>
+        <span className="flow-tools">
+          {tools}
+          <button onClick={onFirst} disabled={atStart} aria-label="First move" title="First move">
+            <NavIcon kind="first" />
+          </button>
+          <button onClick={onLast} disabled={atEnd} aria-label="Last move" title="Last move">
+            <NavIcon kind="last" />
+          </button>
+        </span>
+      </div>
+      <div className="move-flow" role="list" aria-label="Moves" ref={flowRef}>
+        {pairs.map((pair) => (
+          // A move number stays with its moves when the line wraps.
+          <span className="move-pair" role="listitem" key={pair[0]}>
+            <span className="move-no">{pair[0] / 2 + 1}.</span>
+            {pair.map((index) => (
+              <MoveCell
+                key={index}
+                move={moves[index]}
+                selected={index === current}
+                buttonRef={index === current ? currentRef : undefined}
+                onSelect={() => onSelect(index)}
+              />
+            ))}
+          </span>
+        ))}
+        {moves.length === 0 && <p className="muted small">No moves yet. Play one on the board.</p>}
+      </div>
     </section>
   );
 }

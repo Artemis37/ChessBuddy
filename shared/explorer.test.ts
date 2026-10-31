@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { byShare, formatGames, formatShare, isBandRating, moveShare, RATING_BANDS, type ExplorerStats } from "./explorer";
+import {
+  byShare,
+  formatGames,
+  formatShare,
+  isBandRating,
+  moveShare,
+  RATING_BANDS,
+  resultShares,
+  type ExplorerStats,
+} from "./explorer";
 
 const STATS: ExplorerStats = {
   white: 50,
@@ -29,6 +38,16 @@ describe("moveShare", () => {
   it("is 0 for a move nobody played, or a position no game reached", () => {
     expect(moveShare(STATS, "c4")).toBe(0);
     expect(moveShare({ white: 0, draws: 0, black: 0, moves: [] }, "e4")).toBe(0);
+  });
+});
+
+describe("resultShares", () => {
+  it("gives each result's share of the games", () => {
+    expect(resultShares(STATS.moves[0])).toEqual({ white: 50, draws: 10, black: 40 });
+  });
+
+  it("is all 0 without games", () => {
+    expect(resultShares({ white: 0, draws: 0, black: 0 })).toEqual({ white: 0, draws: 0, black: 0 });
   });
 });
 

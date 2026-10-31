@@ -62,6 +62,13 @@ export function gameCount(results: Results): number {
   return results.white + results.draws + results.black;
 }
 
+/** How the games ended, each as a percentage of them; all 0 without games. */
+export function resultShares(results: Results): Results {
+  const games = gameCount(results);
+  const percent = (count: number) => (games > 0 ? (count / games) * 100 : 0);
+  return { white: percent(results.white), draws: percent(results.draws), black: percent(results.black) };
+}
+
 /** Percentage of the position's games that went on with `san`; 0 when it wasn't played. */
 export function moveShare(stats: ExplorerStats, san: string): number {
   const total = gameCount(stats);

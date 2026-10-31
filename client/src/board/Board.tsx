@@ -1,5 +1,5 @@
 import { Chess, type PieceSymbol, type Square } from "chess.js";
-import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from "react";
 import type { Classification, Color } from "../../../shared/types";
 import { GradeIcon } from "../components/icons";
 import { CLASSIFICATION } from "../game";
@@ -51,6 +51,9 @@ interface Notes {
 }
 
 const NO_NOTES: Notes = { arrows: [], squares: {} };
+
+/** How long a finger rests on a square before it draws, as the right mouse button does. */
+const LONG_PRESS_MS = 450;
 
 /** A right-button drag in progress: an arrow from `from`, or a square note while it stays there. */
 interface Drawing {
@@ -104,7 +107,9 @@ type Slides = Map<Square, { dx: number; dy: number }>;
  * board shows where the premoved pieces will stand. Every change of position slides the
  * moved pieces into place. Uses pointer events rather than HTML drag and drop, so there
  * is no drag ghost. As on chess.com, dragging with the right button draws an arrow and
- * right-clicking a square colors it; a left click or a new position clears them.
+ * right-clicking a square colors it; a left click or a new position clears them. On a touch
+ * screen, a long press does the same: on a square it colors it, and sliding on draws an arrow.
+ * A press on a piece you can move picks it up instead, so a slow drag still moves it.
  */
 export function Board({
   fen,
@@ -139,6 +144,15 @@ export function Board({
   /** The last move made by dropping a piece; it is already in place and needs no animation. */
   const dropped = useRef<string | null>(null);
   const previous = useRef<{ placement: Placement; orientation: Color } | null>(null);
+  /** A finger resting on a square, until it has been there long enough to draw. */
+  const press = useRef<{ square: Square; timer: number } | null>(null);
+
+  function cancelPress() {
+    if (press.current) clearTimeout(press.current.timer);
+    press.current = null;
+  }
+
+  useEffect(() => cancelPress, []);
 
   const chess = useMemo(() => new Chess(fen), [fen]);
   const placement = useMemo(() => withPremoves(placementOf(fen), premoves), [fen, premoves]);
@@ -186,6 +200,7 @@ export function Board({
   useLayoutEffect(() => {
     setNotes(NO_NOTES);
     setDrawing(null);
+    cancelPress();
   }, [fen]);
 
   /** Who may pick up pieces now: real moves on your turn, premoves on the opponent's. */
@@ -262,6 +277,10 @@ export function Board({
     });
   }
 
+  function clearNotes() {
+    if (notes.arrows.length > 0 || Object.keys(notes.squares).length > 0) setNotes(NO_NOTES);
+  }
+
   function onPointerDown(event: PointerEvent<HTMLDivElement>) {
     if (promotion) return;
     const { x, y } = pointIn(event);
@@ -285,12 +304,23 @@ export function Board({
     }
     if (event.button !== 0) return;
     // A left click clears what was drawn, as on chess.com, and goes on to do what it would anyway.
-    if (notes.arrows.length > 0 || Object.keys(notes.squares).length > 0) setNotes(NO_NOTES);
+    // A touch clears it once it lifts without having drawn, so another long press adds to it.
+    if (event.pointerType !== "touch") clearNotes();
     if (!square) return;
 
     if (selected && targets.has(square)) {
       tryMove(selected, square, false);
       return;
+    }
+    if (event.pointerType === "touch" && !canPick(square)) {
+      cancelPress();
+      const timer = window.setTimeout(() => {
+        press.current = null;
+        setSelected(null);
+        setDrawing({ from: square, to: square, arrow: "orange", square: "red" });
+        navigator.vibrate?.(15);
+      }, LONG_PRESS_MS);
+      press.current = { square, timer };
     }
     if (canPick(square)) {
       capture(event);
@@ -304,6 +334,10 @@ export function Board({
   }
 
   function onPointerMove(event: PointerEvent<HTMLDivElement>) {
+    if (press.current) {
+      const { x, y } = pointIn(event);
+      if (squareAtPoint(x, y, size, orientation) !== press.current.square) cancelPress();
+    }
     if (drawing) {
       const { x, y } = pointIn(event);
       const square = squareAtPoint(x, y, size, orientation);
@@ -317,13 +351,15 @@ export function Board({
   }
 
   function onPointerUp(event: PointerEvent<HTMLDivElement>) {
+    cancelPress();
     if (drawing) {
-      if (event.button !== 2) return;
+      if (event.button !== 2 && event.pointerType !== "touch") return;
       if (drawing.to === drawing.from) toggleSquare(drawing.from, drawing.square);
       else toggleArrow(drawing.from, drawing.to, drawing.arrow);
       setDrawing(null);
       return;
     }
+    if (event.pointerType === "touch") clearNotes();
     if (!drag) return;
     const { x, y } = pointIn(event);
     const target = squareAtPoint(x, y, size, orientation);
@@ -356,6 +392,7 @@ export function Board({
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={() => {
+        cancelPress();
         setDrag(null);
         setHover(null);
         setDrawing(null);

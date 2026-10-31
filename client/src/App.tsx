@@ -29,12 +29,14 @@ import { capturedBy, capturedInPosition, materialBalance } from "./board/materia
 import type { Premove } from "./board/placement";
 import { PlayerBar } from "./board/PlayerBar";
 import { lastMoveSound, stepSound } from "./board/sound";
-import { MoveList } from "./components/MoveList";
+import { MoveFlow, MoveList } from "./components/MoveList";
 import { MovePanel, START_INDEX } from "./components/MovePanel";
 import { OpeningsCard } from "./components/OpeningsCard";
+import { PhoneLayout, type MainPanel } from "./components/PhoneLayout";
 import { ReviewCard } from "./components/ReviewCard";
-import { ModePicker, SetupCard } from "./components/SetupCard";
+import { ModePicker, modeLabel, SetupCard } from "./components/SetupCard";
 import { colorName, moveNumber, type PlayedMove, type Questions, type Settings } from "./game";
+import { usePhoneLayout } from "./phone";
 import { nextToGrade, scoreOf, type ReviewGame } from "./review";
 import { activePath, addExchange, showVersion } from "./thread";
 
@@ -180,6 +182,7 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
   /** Bumped whenever the move list is rewritten, so late bot replies are dropped. */
   const gameToken = useRef(0);
   const evalRequested = useRef(new Set<string>());
+  const phone = usePhoneLayout();
 
   const game = useMemo(() => {
     const g = new Chess();
@@ -956,6 +959,214 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
   /** Playing on, the panel may show your graded move while the board has moved on to the reply. */
   const boardAhead = !followsBoard && live && lastMove && panelIndex !== moves.length - 1 ? moves.length - 1 : null;
 
+  // The parts both layouts show: the desktop's three columns, and the phone's panels.
+  const account = (
+    <div className="account">
+      <span title="Signed in">{user.username}</span>
+      {user.vip && (
+        <span className="vip" title="VIP account: every coach model, Opus included">
+          VIP
+        </span>
+      )}
+      <button onClick={onSignOut}>Sign out</button>
+    </div>
+  );
+  const setupCard = <SetupCard draft={draft} onChange={changeDraft} onNewGame={newGame} />;
+  const openingsCard = (draft.mode === "learn" || learning) && (
+    <OpeningsCard
+      lines={openingLines}
+      next={library?.next ?? NO_BOOK_MOVES}
+      book={book}
+      study={learning ? study : null}
+      moves={moves}
+      shown={shownCount}
+      fen={displayFen}
+      onPick={startStudy}
+      onPlay={explore}
+      onHover={(uci) => setBookHover(uci ? { fen: displayFen, uci } : null)}
+      onBackToLine={backToLine}
+      explorer={status?.explorer ?? null}
+      compact={phone}
+    />
+  );
+  const reviewCard = (draft.mode === "review" || reviewing) && (
+    <ReviewCard
+      game={reviewed}
+      gameMoves={line}
+      moves={moves}
+      leftAt={leftAt}
+      myColor={settings.myColor}
+      stopped={reviewStopped}
+      onLoad={startReview}
+      onResume={resumeReview}
+      onBackToGame={backToLine}
+    />
+  );
+  const movePanel = (
+    <MovePanel
+      move={panelMove}
+      index={panelIndex}
+      start={startQuestions}
+      myColor={settings.myColor}
+      bothSides={settings.mode === "both" || reviewing}
+      learning={learning}
+      reviewing={reviewing}
+      retryable={retryable}
+      onBoard={followsBoard || (live ? panelIndex === moves.length - 1 : panelIndex === shownCount - 1)}
+      coach={status?.coach ?? null}
+      vip={user.vip}
+      model={coachModel}
+      onModelChange={chooseModel}
+      onExplain={explain}
+      onRetry={retry}
+      onAnalyze={(i) => grade(moves[i])}
+      onShowOnBoard={(i) => goTo(i + 1)}
+      boardAhead={
+        boardAhead === null ? null : { label: `${moveNumber(boardAhead)} ${moves[boardAhead].san}`, onPick: () => setPickedId(moves[boardAhead].id) }
+      }
+      active={
+        walkthrough && walkthrough.moveId === panelId && walkStep
+          ? { reply: walkthrough.reply, step: walkthrough.step }
+          : null
+      }
+      onShowStep={(i, step, reply) => showStep(i === START_INDEX ? START_ID : moves[i].id, step, reply)}
+      onAsk={ask}
+      onShowVersion={showQuestionVersion}
+    />
+  );
+  const board = (
+    <Board
+      fen={boardFen}
+      orientation={orientation}
+      movable={movable}
+      premoveColor={premoveColor}
+      premoves={live && !walkView ? premoves : []}
+      lastMove={walkView ? walkView.lastMove : shownMove ? toMove(shownMove.uci) : null}
+      arrows={arrows}
+      marks={marks}
+      badge={badge}
+      onMove={(from, to, promotion) => (followsBoard ? explore : play)(`${from}${to}${promotion ?? ""}`)}
+      onPremove={(premove) => setPremoves((list) => [...list, premove])}
+      onCancelPremoves={() => setPremoves([])}
+    />
+  );
+  const walkText = walkthrough && walkStep && (
+    <span>
+      Explaining{" "}
+      <strong>{walkMove ? `${moveNumber(walkMoveIndex)} ${walkMove.san}` : "the starting position"}</strong> ·{" "}
+      {walkthrough.reply !== null && "answer · "}step {walkthrough.step + 1} of {walkSteps.length}
+    </span>
+  );
+  const statusText = botError ? (
+    <>
+      <span className="error-text">The bot couldn't move: {botError}</span>
+      <button onClick={() => setBotError(null)}>Try again</button>
+    </>
+  ) : (
+    endText && <strong>{endText}</strong>
+  );
+  const statusTitle = botError ? `The bot couldn't move: ${botError}` : (endText ?? undefined);
+
+  if (phone) {
+    const main: MainPanel =
+      draft.mode === "learn"
+        ? { label: "Explorer", icon: "explorer", content: <>{openingsCard}{reviewCard}</>, subject: study }
+        : draft.mode === "review"
+          ? { label: "Review", icon: "review", content: <>{reviewCard}{openingsCard}</>, subject: review }
+          : { label: "Game", icon: "game", content: <>{setupCard}{openingsCard}{reviewCard}</> };
+    // Learning an opening, the board is all there is to it: the players' bars would take the explorer's room.
+    const players = settings.mode !== "learn";
+    // Back and Forward step through a playing explanation, as the arrow keys do, and otherwise the moves.
+    const walking = walkthrough && walkStep ? walkthrough : null;
+    return (
+      <PhoneLayout
+        mode={draft.mode}
+        title={modeLabel(draft.mode)}
+        menu={(close) => (
+          <>
+            <ModePicker
+              draft={draft}
+              onChange={(next) => {
+                changeDraft(next);
+                close();
+              }}
+            />
+            {/* Bot games keep their settings and New game in the Game panel instead. */}
+            {(draft.mode === "learn" || draft.mode === "review") && setupCard}
+            <section className="card m-account">
+              <StatusPills status={status} />
+              {account}
+            </section>
+          </>
+        )}
+        alert={!status?.engine.ready || !status.coach.ready}
+        tools={
+          <button
+            className="sound-toggle m-sound"
+            onClick={toggleSound}
+            aria-pressed={soundOn}
+            aria-label="Sound"
+            title={soundOn ? "Mute move sounds" : "Turn move sounds on"}
+          >
+            <SoundIcon on={soundOn} />
+          </button>
+        }
+        evalBar={<EvalBar evaluation={boardEvaluation} orientation={orientation} horizontal />}
+        top={players && playerBar(other(orientation))}
+        bottom={players && playerBar(orientation)}
+        board={board}
+        strip={
+          walkText ? (
+            <>
+              {walkText}
+              <button className="m-strip-button" onClick={() => setWalkthrough(null)} aria-label="Back to the game">
+                <span aria-hidden>✕</span>
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="m-opening" title={opening ? `${opening.eco} ${opening.name}` : undefined}>
+                {opening ? opening.name : "Starting Position"}
+              </span>
+              {statusText && (
+                <span className="m-status" role="status" title={statusTitle}>
+                  {statusText}
+                </span>
+              )}
+            </>
+          )
+        }
+        main={main}
+        moves={
+          <MoveFlow
+            moves={displayMoves}
+            current={shownCount - 1}
+            white={playerName("w")}
+            black={playerName("b")}
+            score={atReviewEnd ? scoreOf(reviewed.result) : scoreText(game)}
+            onSelect={(i) => {
+              goTo(i + 1);
+              setPickedId(moves[i].id);
+            }}
+            onFirst={() => goTo(0)}
+            onLast={() => goTo(moves.length)}
+            tools={
+              <button onClick={undo} disabled={!canUndo} title="Take back your last move">
+                <span aria-hidden>↶</span> Undo
+              </button>
+            }
+          />
+        }
+        coach={movePanel}
+        onFlip={() => setFlipped((f) => !f)}
+        onBack={() => (walking ? showStep(walking.moveId, walking.step - 1, walking.reply) : goTo(shownCount - 1))}
+        onForward={() => (walking ? showStep(walking.moveId, walking.step + 1, walking.reply) : goTo(shownCount + 1))}
+        canBack={walking ? walking.step > 0 : shownCount > 0}
+        canForward={walking ? walking.step < walkSteps.length - 1 : shownCount < moves.length}
+      />
+    );
+  }
+
   return (
     <div className="app">
       <header className="topbar">
@@ -964,92 +1175,24 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
         </h1>
         <div className="topbar-right">
           <StatusPills status={status} />
-          <div className="account">
-            <span title="Signed in">{user.username}</span>
-            {user.vip && (
-              <span className="vip" title="VIP account: every coach model, Opus included">
-                VIP
-              </span>
-            )}
-            <button onClick={onSignOut}>Sign out</button>
-          </div>
+          {account}
         </div>
       </header>
 
       <main className="layout">
         <aside className="left-col" aria-label="Game details and the coach">
-          <SetupCard draft={draft} onChange={changeDraft} onNewGame={newGame} />
-          {(draft.mode === "learn" || learning) && (
-            <OpeningsCard
-              lines={openingLines}
-              next={library?.next ?? NO_BOOK_MOVES}
-              book={book}
-              study={learning ? study : null}
-              moves={moves}
-              shown={shownCount}
-              fen={displayFen}
-              onPick={startStudy}
-              onPlay={explore}
-              onHover={(uci) => setBookHover(uci ? { fen: displayFen, uci } : null)}
-              onBackToLine={backToLine}
-              explorer={status?.explorer ?? null}
-            />
-          )}
-          {(draft.mode === "review" || reviewing) && (
-            <ReviewCard
-              game={reviewed}
-              gameMoves={line}
-              moves={moves}
-              leftAt={leftAt}
-              myColor={settings.myColor}
-              stopped={reviewStopped}
-              onLoad={startReview}
-              onResume={resumeReview}
-              onBackToGame={backToLine}
-            />
-          )}
-          <MovePanel
-            move={panelMove}
-            index={panelIndex}
-            start={startQuestions}
-            myColor={settings.myColor}
-            bothSides={settings.mode === "both" || reviewing}
-            learning={learning}
-            reviewing={reviewing}
-            retryable={retryable}
-            onBoard={followsBoard || (live ? panelIndex === moves.length - 1 : panelIndex === shownCount - 1)}
-            coach={status?.coach ?? null}
-            vip={user.vip}
-            model={coachModel}
-            onModelChange={chooseModel}
-            onExplain={explain}
-            onRetry={retry}
-            onAnalyze={(i) => grade(moves[i])}
-            onShowOnBoard={(i) => goTo(i + 1)}
-            boardAhead={
-              boardAhead === null ? null : { label: `${moveNumber(boardAhead)} ${moves[boardAhead].san}`, onPick: () => setPickedId(moves[boardAhead].id) }
-            }
-            active={
-              walkthrough && walkthrough.moveId === panelId && walkStep
-                ? { reply: walkthrough.reply, step: walkthrough.step }
-                : null
-            }
-            onShowStep={(i, step, reply) => showStep(i === START_INDEX ? START_ID : moves[i].id, step, reply)}
-            onAsk={ask}
-            onShowVersion={showQuestionVersion}
-          />
+          {setupCard}
+          {openingsCard}
+          {reviewCard}
+          {movePanel}
         </aside>
 
         <div className="board-dock">
           <section className="board-col">
             <div className="walk-strip">
-              {walkthrough && walkStep && (
+              {walkText && (
                 <>
-                  <span>
-                    Explaining{" "}
-                    <strong>{walkMove ? `${moveNumber(walkMoveIndex)} ${walkMove.san}` : "the starting position"}</strong> ·{" "}
-                    {walkthrough.reply !== null && "answer · "}step {walkthrough.step + 1} of {walkSteps.length}
-                  </span>
+                  {walkText}
                   <button onClick={() => setWalkthrough(null)} title="Back to the game (Esc)">
                     <span aria-hidden>✕</span> Esc
                   </button>
@@ -1059,22 +1202,7 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
             {playerBar(other(orientation))}
             <div className="board-row">
               <EvalBar evaluation={boardEvaluation} orientation={orientation} />
-              <div className="board-wrap">
-                <Board
-                  fen={boardFen}
-                  orientation={orientation}
-                  movable={movable}
-                  premoveColor={premoveColor}
-                  premoves={live && !walkView ? premoves : []}
-                  lastMove={walkView ? walkView.lastMove : shownMove ? toMove(shownMove.uci) : null}
-                  arrows={arrows}
-                  marks={marks}
-                  badge={badge}
-                  onMove={(from, to, promotion) => (followsBoard ? explore : play)(`${from}${to}${promotion ?? ""}`)}
-                  onPremove={(premove) => setPremoves((list) => [...list, premove])}
-                  onCancelPremoves={() => setPremoves([])}
-                />
-              </div>
+              <div className="board-wrap">{board}</div>
             </div>
             {playerBar(orientation)}
 
@@ -1094,15 +1222,8 @@ export function App({ user, onSignOut }: { user: SessionResponse; onSignOut: () 
                 <SoundIcon on={soundOn} /> Sound
               </button>
               {/* In the controls' row, so the end of a game or an error doesn't move anything. */}
-              <div className="board-status" role="status" title={botError ? `The bot couldn't move: ${botError}` : (endText ?? undefined)}>
-                {botError ? (
-                  <>
-                    <span className="error-text">The bot couldn't move: {botError}</span>
-                    <button onClick={() => setBotError(null)}>Try again</button>
-                  </>
-                ) : (
-                  endText && <strong>{endText}</strong>
-                )}
+              <div className="board-status" role="status" title={statusTitle}>
+                {statusText}
               </div>
             </div>
           </section>

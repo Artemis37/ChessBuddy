@@ -1,5 +1,5 @@
 import { Chess } from "chess.js";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   byShare,
   EXPLORER_SPEEDS,
@@ -8,7 +8,9 @@ import {
   gameCount,
   moveShare,
   RATING_BANDS,
+  resultShares,
   type ExplorerStats,
+  type Results,
 } from "../../../shared/explorer";
 import { numberedLine } from "../../../shared/notation";
 import {
@@ -24,6 +26,7 @@ import {
 } from "../../../shared/openings";
 import { loadBand, saveBand, useExplorerStats } from "../explorer";
 import { moveNumber, type PlayedMove } from "../game";
+import { scrollPanelToTop } from "./PhoneLayout";
 
 const START_FEN = new Chess().fen();
 /** Lines listed for a search across every opening; a longer query narrows it down. */
@@ -54,16 +57,21 @@ interface Props {
   onBackToLine: () => void;
   /** Whether the server can ask the Lichess opening explorer how often each move is played; null until known. */
   explorer: { ready: boolean; error?: string } | null;
+  /**
+   * The phone layout's explorer: each book move's row also shows how its games ended, as phone
+   * chess apps' explorers do, and the lists scroll with the panel rather than on their own.
+   */
+  compact?: boolean;
 }
 
 /** Learning openings: pick a line, then follow it, see the book moves and find your way back. */
 export function OpeningsCard(props: Props) {
-  const { lines, study, onPick } = props;
+  const { lines, study, onPick, compact } = props;
   const [choosing, setChoosing] = useState(false);
 
   if (!lines || lines.length === 0) {
     return (
-      <section className="card openings">
+      <section className={compact ? "card openings compact" : "card openings"}>
         <h2>Learn an opening</h2>
         {lines ? (
           <p className="error-text">Couldn't load the opening list. Run "npm run openings:build" and reload.</p>
@@ -84,6 +92,7 @@ export function OpeningsCard(props: Props) {
           onPick(line);
         }}
         onCancel={study ? () => setChoosing(false) : undefined}
+        compact={compact}
       />
     );
   }
@@ -94,15 +103,23 @@ function OpeningPicker({
   lines,
   onPick,
   onCancel,
+  compact,
 }: {
   lines: OpeningLine[];
   onPick: (line: OpeningLine) => void;
   onCancel?: () => void;
+  compact?: boolean;
 }) {
   const families = useMemo(() => openingFamilies(lines), [lines]);
   const [family, setFamily] = useState<OpeningFamily | null>(null);
   const [query, setQuery] = useState("");
   const q = query.trim();
+  const ref = useRef<HTMLElement>(null);
+
+  // On a phone the panel scrolls rather than the list, so a family's lines show from the top.
+  useEffect(() => {
+    if (compact) scrollPanelToTop(ref.current);
+  }, [family, compact]);
 
   const open = (chosen: OpeningFamily | null) => {
     setFamily(chosen);
@@ -142,7 +159,7 @@ function OpeningPicker({
   }
 
   return (
-    <section className="card openings">
+    <section className={compact ? "card openings compact" : "card openings"} ref={ref}>
       <div className="openings-head">
         {family ? (
           <button className="back" onClick={() => open(null)}>
@@ -235,6 +252,7 @@ function StudyView({
   onHover,
   onBackToLine,
   explorer,
+  compact,
   onChange,
 }: Props & { study: OpeningLine; onChange: () => void }) {
   const leftAt = divergence(
@@ -290,7 +308,7 @@ function StudyView({
           onFocus={() => point(choice)}
           onBlur={() => onHover(null)}
         >
-          {statsReady && <span className="share-bar" style={{ width: `${Math.min(100, share)}%` }} />}
+          {statsReady && !compact && <span className="share-bar" style={{ width: `${Math.min(100, share)}%` }} />}
           <span className="book-san">{choice.label}</span>
           <span className="book-name">{inBook ? (choice.name ? shortName(choice.name) : "") : "Not in the book"}</span>
           {inLine && <span className="line-tag">line</span>}
@@ -302,6 +320,7 @@ function StudyView({
               {shareText}
             </span>
           )}
+          {statsReady && compact && <ResultsBar move={here?.moves.find((m) => m.san === choice.san)} />}
         </button>
       </li>
     );
@@ -323,6 +342,12 @@ function StudyView({
     );
   }
 
+  const lineText = (
+    <p className="owner">
+      {study.eco} · {numberedLine(START_FEN, study.moves)}
+    </p>
+  );
+
   let status;
   if (leftAt !== null) {
     status = (
@@ -336,6 +361,16 @@ function StudyView({
           {moveNumber(leftAt)} {study.moves[leftAt]}
         </strong>
         .
+      </>
+    );
+  } else if (compact && shown < study.moves.length) {
+    // One line on a phone, so the book moves show without scrolling.
+    status = (
+      <>
+        Move {shown} of {study.moves.length} · next{" "}
+        <strong>
+          {moveNumber(shown)} {study.moves[shown]}
+        </strong>
       </>
     );
   } else if (shown < study.moves.length) {
@@ -355,13 +390,11 @@ function StudyView({
   }
 
   return (
-    <section className="card openings">
+    <section className={compact ? "card openings compact" : "card openings"}>
       <div className="openings-head">
         <div>
           <h2>{study.name}</h2>
-          <p className="owner">
-            {study.eco} · {numberedLine(START_FEN, study.moves)}
-          </p>
+          {!compact && lineText}
         </div>
         <button onClick={onChange}>Change</button>
       </div>
@@ -375,7 +408,7 @@ function StudyView({
       )}
 
       <div className="book-head">
-        <h3>Book moves here</h3>
+        <h3>{compact ? "Book moves" : "Book moves here"}</h3>
         {statsReady && (
           <select
             className="band-select"
@@ -415,6 +448,8 @@ function StudyView({
         />
       )}
       {explorer && !explorer.ready && explorer.error && <p className="muted small">{explorer.error}</p>}
+      {/* On a phone the book moves come first; the line's moves are also in the Moves panel. */}
+      {compact && lineText}
     </section>
   );
 }
@@ -438,14 +473,14 @@ function BandChart({
   const here = stats[chosen];
   const move = here?.moves.find((m) => m.san === choice.san);
   const games = move ? gameCount(move) : 0;
-  const percent = (count: number) => (games > 0 ? (count / games) * 100 : 0);
+  const split = move ? resultShares(move) : null;
   const level = `≈ ${RATING_BANDS[chosen].chessCom}`;
 
   let results = " ";
   if (here && games === 0) results = `Not played at ${level}`;
-  else if (move) {
-    results = `White ${Math.round(percent(move.white))}% · draw ${Math.round(percent(move.draws))}% · Black ${Math.round(
-      percent(move.black),
+  else if (split) {
+    results = `White ${Math.round(split.white)}% · draw ${Math.round(split.draws)}% · Black ${Math.round(
+      split.black,
     )}% · ${formatGames(games)} games at ${level}`;
   }
 
@@ -476,15 +511,42 @@ function BandChart({
         ))}
       </div>
       <div className="results" title="White wins, draws, Black wins">
-        {move && games > 0 && (
+        {split && games > 0 && (
           <>
-            <span className="results-white" style={{ width: `${percent(move.white)}%` }} />
-            <span className="results-draw" style={{ width: `${percent(move.draws)}%` }} />
-            <span className="results-black" style={{ width: `${percent(move.black)}%` }} />
+            <span className="results-white" style={{ width: `${split.white}%` }} />
+            <span className="results-draw" style={{ width: `${split.draws}%` }} />
+            <span className="results-black" style={{ width: `${split.black}%` }} />
           </>
         )}
       </div>
       <p className="results-text">{results}</p>
     </div>
+  );
+}
+
+/** Wide enough a share of the bar to print its percentage in. */
+const LABELLED_SHARE = 22;
+
+/**
+ * How a book move's games ended in the chosen band, White's wins, draws and Black's wins, on its
+ * row in the phone layout. Grey while the band loads, or for a move its players didn't play.
+ */
+function ResultsBar({ move }: { move: Results | undefined }) {
+  const split = move && gameCount(move) > 0 ? resultShares(move) : null;
+  if (!split) return <span className="row-results" />;
+  const part = (kind: "white" | "draw" | "black", share: number) => (
+    <span className={`results-${kind}`} style={{ width: `${share}%` }}>
+      {share >= LABELLED_SHARE && `${Math.round(share)}%`}
+    </span>
+  );
+  return (
+    <span
+      className="row-results"
+      title={`White ${Math.round(split.white)}% · draw ${Math.round(split.draws)}% · Black ${Math.round(split.black)}%`}
+    >
+      {part("white", split.white)}
+      {part("draw", split.draws)}
+      {part("black", split.black)}
+    </span>
   );
 }

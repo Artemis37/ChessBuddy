@@ -437,55 +437,663 @@ select {
   }
 }
 
-/* One column: the board, the moves and the mode, then the coach's panel, which scrolls on its
-   own so the page keeps its height while you step through the game. */
-@media (max-width: 759px) {
-  .app {
-    height: auto;
-    overflow: visible;
+/* Phone layout (PhoneLayout.tsx; PHONE_QUERY in phone.ts decides when): the header, the
+   evaluation bar, the board, the opening's name and the toolbar keep their size, and the panel
+   between them takes the rest of the screen and scrolls on its own, so the page never scrolls and
+   stepping through the moves never moves the board. The board is as wide as the screen unless
+   that would leave the panel less than about a quarter of it. Held sideways, the board sits on
+   the left and everything else on the right. */
+
+html:has(.app.phone) {
+  scrollbar-gutter: auto;
+}
+
+.app.phone {
+  --m-header: 48px;
+  --m-eval: 30px;
+  --m-player: 30px;
+  --m-players: 0px;
+  --m-strip: 32px;
+  --m-toolbar: 58px;
+  --m-vh: 100vh;
+  --m-fit: min(
+    100vw,
+    var(--m-vh) - var(--m-header) - var(--m-eval) - var(--m-players) - var(--m-strip) - var(--m-toolbar) -
+      max(120px, 0.24 * var(--m-vh))
+  );
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "header"
+    "stage"
+    "strip"
+    "panels"
+    "toolbar";
+  height: var(--m-vh);
+  background: var(--surface);
+}
+
+@supports (height: 100dvh) {
+  .app.phone {
+    --m-vh: 100dvh;
+  }
+}
+
+.app.phone.with-players {
+  --m-players: calc(2 * var(--m-player));
+}
+
+/* On a short screen the board needs the players' bars' room more. */
+@media (max-height: 640px) {
+  .app.phone.with-players {
+    --m-players: 0px;
   }
 
-  .layout {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: none;
+  .app.phone .player-bar {
+    display: none;
+  }
+}
+
+@media (orientation: landscape) {
+  .app.phone {
+    --m-fit: min(58vw, var(--m-vh) - var(--m-eval) - var(--m-players));
+    grid-template-columns: var(--m-fit) minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
     grid-template-areas:
-      "board"
-      "right"
-      "left";
-    gap: 12px;
-    padding: 8px 12px 16px;
+      "stage header"
+      "stage strip"
+      "stage panels"
+      "stage toolbar";
   }
 
-  .board-dock {
+  .app.phone .m-stage {
     width: 100%;
-    min-width: 0;
+    align-self: center;
+  }
+}
+
+/* Inputs under 16px make iOS zoom the page while you type. */
+.app.phone input,
+.app.phone select,
+.app.phone textarea {
+  font-size: 16px;
+}
+
+.m-icon {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.m-header {
+  grid-area: header;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: var(--m-header);
+  padding: 0 6px;
+  background: var(--nav-strip);
+}
+
+/* Fills the header's left side, so it's easy to tap. */
+.m-menu-button {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px;
+  background: transparent;
+  font-size: 17px;
+}
+
+.m-menu-button img {
+  flex: none;
+  width: 28px;
+  height: 28px;
+}
+
+.m-menu-button .m-icon {
+  width: 20px;
+  height: 20px;
+  color: var(--muted);
+}
+
+.m-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.m-alert {
+  position: absolute;
+  top: 6px;
+  left: 32px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--blunder);
+  box-shadow: 0 0 0 2px var(--nav-strip);
+}
+
+.m-header-tools {
+  display: flex;
+  align-items: center;
+}
+
+.m-sound {
+  padding: 8px 10px;
+  background: transparent;
+}
+
+.m-sound svg {
+  width: 22px;
+  height: 22px;
+}
+
+/* Touch screens keep a button's hover look after a tap, so these buttons have none. */
+.m-menu-button:hover:not(:disabled),
+.m-sound:hover:not(:disabled),
+.m-tool:hover:not(:disabled),
+.m-close:hover:not(:disabled) {
+  background: transparent;
+  color: var(--text);
+}
+
+.m-stage {
+  grid-area: stage;
+  justify-self: center;
+  width: min(100%, var(--m-fit));
+  display: flex;
+  flex-direction: column;
+}
+
+.m-stage > .eval-bar {
+  margin: 6px 8px;
+}
+
+.app.phone .board {
+  border-radius: 0;
+  /* iOS would otherwise open its menu on a long press, which draws here. */
+  -webkit-touch-callout: none;
+}
+
+.app.phone .player-bar {
+  min-height: 0;
+  height: var(--m-player);
+  gap: 8px;
+  padding: 0 8px;
+}
+
+.app.phone .avatar {
+  flex-basis: 22px;
+  height: 22px;
+}
+
+.app.phone .avatar svg {
+  width: 17px;
+  height: 17px;
+}
+
+.app.phone .player-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.app.phone .player-name {
+  font-size: 14px;
+}
+
+.app.phone .captures {
+  min-height: 0;
+}
+
+.app.phone .capture-group img {
+  width: 16px;
+  height: 16px;
+}
+
+.app.phone .capture-group img + img {
+  margin-left: -9px;
+}
+
+/* The opening's name, as under the board in phone apps; an explanation playing or the end of the
+   game take its place or its right end. One line, so it never changes height. */
+.m-strip {
+  grid-area: strip;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: var(--m-strip);
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.m-strip > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.m-opening {
+  flex: 1;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.m-opening:only-child {
+  text-align: center;
+}
+
+.m-status {
+  flex: none;
+  max-width: 60%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.m-status > span,
+.m-status > strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.m-status button,
+.m-strip-button {
+  flex: none;
+  padding: 2px 10px;
+  font-size: 13px;
+}
+
+/* The panels sit side by side and slide; each scrolls on its own. */
+.m-panels {
+  grid-area: panels;
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+  /* clip, not hidden: focus or scrollIntoView could scroll a hidden overflow sideways, between panels. */
+  overflow: clip;
+}
+
+.m-track {
+  display: flex;
+  height: 100%;
+  transition: transform 0.28s cubic-bezier(0.25, 0.8, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .m-track {
+    transition: none;
+  }
+}
+
+.m-page {
+  flex: 0 0 100%;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+  scrollbar-width: thin;
+  scrollbar-color: #4b4845 transparent;
+}
+
+.m-page > * {
+  flex: none;
+}
+
+.app.phone .m-page > .card {
+  background: transparent;
+  border-radius: 0;
+  padding: 12px 14px;
+}
+
+.app.phone .m-page > .card + .card {
+  border-top: 1px solid var(--border);
+}
+
+/* The lists scroll with the panel, not on their own. */
+.app.phone .pick-list,
+.app.phone .book-moves {
+  max-height: none;
+  overflow: visible;
+}
+
+.app.phone .m-page > .move-flow-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+
+.move-flow-card .game-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px 6px 14px;
+}
+
+.flow-players {
+  min-width: 0;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.flow-tools {
+  flex: none;
+  display: flex;
+  gap: 4px;
+}
+
+.flow-tools button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 10px;
+  background: var(--nav-button);
+  font-size: 13px;
+}
+
+.flow-tools svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: #c6c6c6;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.flow-tools button:disabled svg {
+  stroke: #737271;
+}
+
+.move-flow {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 4px 10px;
+  padding: 10px 12px 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.move-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.move-flow .move-no {
+  padding-left: 0;
+  font-size: 15px;
+}
+
+.move-flow > p {
+  margin: 0;
+}
+
+/* The explorer's rows on a phone: the move, the opening it leads to, how often it's played, and
+   how its games ended. */
+.openings.compact h2 {
+  font-size: 15px;
+}
+
+.openings.compact .openings-head > div {
+  min-width: 0;
+}
+
+.openings.compact .openings-head h2,
+.openings.compact > .owner {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.openings.compact > .owner {
+  margin: 10px 0 0;
+}
+
+.openings.compact .openings-head button {
+  flex: none;
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+.openings.compact .study-status {
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+.openings.compact .book-head {
+  margin-top: 8px;
+}
+
+.openings.compact .book-head h3 {
+  white-space: nowrap;
+}
+
+.app.phone .openings .band-select {
+  padding: 2px 6px;
+}
+
+.openings.compact .book-move {
+  gap: 8px;
+  padding: 8px 6px;
+}
+
+.openings.compact .book-san {
+  flex-basis: 64px;
+}
+
+.row-results {
+  flex: 0 0 clamp(84px, 30%, 128px);
+  display: flex;
+  height: 18px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--surface-3);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+}
+
+.row-results > span {
+  min-width: 0;
+  overflow: hidden;
+  text-align: center;
+}
+
+.row-results .results-white {
+  color: #403d39;
+}
+
+.row-results .results-draw,
+.row-results .results-black {
+  color: #fff;
+}
+
+.m-toolbar {
+  grid-area: toolbar;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  align-items: center;
+  height: var(--m-toolbar);
+  padding: 0 4px;
+  background: var(--nav-strip);
+}
+
+.m-tool {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 100%;
+  padding: 0;
+  background: transparent;
+  color: var(--text-body);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.m-tool:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* The coach, the big green button in the middle. */
+.m-coach,
+.m-coach:hover:not(:disabled) {
+  justify-self: center;
+  display: grid;
+  place-items: center;
+  width: min(100%, 68px);
+  height: 46px;
+  padding: 0;
+  border-radius: 10px;
+  background: var(--green);
+  box-shadow: inset 0 -4px 0 var(--green-edge);
+  color: #fff;
+}
+
+@media (hover: hover) {
+  .m-coach:hover:not(:disabled) {
+    background: #a3d160;
+  }
+}
+
+.m-coach[aria-pressed="true"] {
+  box-shadow: inset 0 3px 0 var(--green-edge);
+}
+
+.m-coach .m-icon {
+  width: 28px;
+  height: 28px;
+  stroke-width: 2.2;
+}
+
+/* The menu: a sheet over the page, from the bottom. */
+.m-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  animation: fade-in 0.2s ease;
+}
+
+.m-sheet {
+  width: 100%;
+  max-width: 560px;
+  max-height: 88%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-radius: 12px 12px 0 0;
+  box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.4);
+  outline: none;
+  animation: sheet-up 0.24s ease-out;
+}
+
+.m-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 6px 4px 16px;
+}
+
+.m-sheet-head h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.m-close {
+  padding: 6px 12px;
+  background: transparent;
+  font-size: 16px;
+}
+
+.m-sheet-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 12px 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.m-sheet-body > * {
+  flex: none;
+}
+
+.m-account {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.m-account .account {
+  justify-content: space-between;
+  font-size: 14px;
+}
+
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .m-sheet-backdrop,
+  .m-sheet {
+    animation: none;
+  }
+}
+
+/* The sign-in page on a phone: as tall as the visible screen, and no zoom while typing. */
+@media (max-width: 759px) {
+  .login-page {
+    min-height: 100dvh;
   }
 
-  .right-col,
-  .left-col {
-    padding: 0;
-  }
-
-  .right-col .moves {
-    order: -1;
-  }
-
-  .right-col .move-table {
-    height: 200px;
-  }
-
-  .left-col {
-    height: 75vh;
-  }
-
-  .left-col .panel {
-    order: -1;
-  }
-
-  /* Always takes its room, so starting or ending an explanation doesn't move the board. */
-  .walk-strip {
-    position: static;
-    flex: none;
+  .field input {
+    font-size: 16px;
   }
 }
 
@@ -804,6 +1412,42 @@ select {
 .eval-bar.flipped .eval-label.on-black {
   bottom: 5px;
   top: auto;
+}
+
+/* On a phone, across the top: White's share grows from the left, or from the right with Black
+   at the bottom, and the label sits at the leading side's end. */
+.eval-bar.horizontal {
+  flex: none;
+  flex-direction: row;
+  justify-content: flex-start;
+  height: 18px;
+}
+
+.eval-bar.horizontal.flipped {
+  justify-content: flex-end;
+}
+
+.eval-bar.horizontal .eval-white {
+  transition: width 0.4s ease;
+}
+
+.eval-bar.horizontal .eval-label.on-white,
+.eval-bar.horizontal .eval-label.on-black {
+  top: 0;
+  bottom: 0;
+  line-height: 18px;
+}
+
+.eval-bar.horizontal .eval-label.on-white,
+.eval-bar.horizontal.flipped .eval-label.on-black {
+  left: 6px;
+  right: auto;
+}
+
+.eval-bar.horizontal .eval-label.on-black,
+.eval-bar.horizontal.flipped .eval-label.on-white {
+  left: auto;
+  right: 6px;
 }
 
 /* Player bars */

@@ -14,6 +14,10 @@ const MODES: { mode: Mode; label: string }[] = [
   { mode: "review", label: "Review a game" },
 ];
 
+export function modeLabel(mode: Mode): string {
+  return MODES.find((m) => m.mode === mode)!.label;
+}
+
 const HELP: Record<Mode, string> = {
   bot: "Bot ratings are estimates on the Chess.com scale. Only your moves are graded.",
   both: "You move both colors and every move is graded. My color sits at the bottom of the board.",
