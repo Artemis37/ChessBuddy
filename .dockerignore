@@ -10,4 +10,5 @@ dist
 .workflow-provip
 docs
 docker
+tailscale-funnel
 *.log
