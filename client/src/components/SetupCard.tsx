@@ -22,7 +22,7 @@ const HELP: Record<Mode, string> = {
   bot: "Bot ratings are estimates on the Chess.com scale. Only your moves are graded.",
   both: "You move both colors and every move is graded. My color sits at the bottom of the board.",
   learn:
-    "Step through an opening with → or its book moves, and play your own moves anywhere to explore. Explain any move to learn the idea behind it.",
+    "Step through an opening with → or its book moves, and play your own moves anywhere to explore. Every move is graded, book moves included. Explain any move to learn the idea behind it.",
   review:
     "Load one of your Chess.com games, or paste a game link or PGN. Every move of both sides is graded. Play moves for either side from any point to try another line, then go back to the game. Learn openings studies the game's opening, and this tab brings the review back. My color sits at the bottom of the board.",
 };

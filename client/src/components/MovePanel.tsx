@@ -22,12 +22,15 @@ interface Props {
   myColor: Color;
   /** Playing both sides: every move is graded, and the other color is yours to move too. */
   bothSides: boolean;
-  /** Learning an opening: you move both sides, and book moves are graded only when asked. */
+  /** Learning an opening: you move both sides, and every move is graded, book moves included. */
   learning: boolean;
   /** Reviewing a game: every move of the game is graded, and you can play moves for either side. */
   reviewing: boolean;
   /** The move can be taken back to try another: yours, or one played off the line. */
   retryable: boolean;
+  /** Grading stopped because a move couldn't be analyzed, so the moves waiting wait for Resume. */
+  stopped: boolean;
+  onResume: () => void;
   onBoard: boolean;
   coach: StatusResponse["coach"] | null;
   /** VIP accounts may pick every model; others can't pick VIP ones such as Opus. */
@@ -64,6 +67,8 @@ export function MovePanel({
   learning,
   reviewing,
   retryable,
+  stopped,
+  onResume,
   onBoard,
   coach,
   vip,
@@ -179,17 +184,17 @@ export function MovePanel({
     return (
       <section className="card panel">
         <PanelTitle title={title} owner={owner} />
-        {analyzing ? (
+        {analyzing && stopped && !move.grading ? (
+          <>
+            <p className="error-text small">Grading stopped: another move couldn't be analyzed.</p>
+            <div className="actions">
+              <button onClick={onResume}>Resume grading</button>
+            </div>
+          </>
+        ) : analyzing ? (
           <p className="muted">
             <span className="spinner" /> Analyzing with Stockfish…
           </p>
-        ) : learning ? (
-          <>
-            <p className="muted">A book move, part of the opening's theory. Explain it to learn the idea behind it.</p>
-            <div className="actions">
-              <button onClick={() => onAnalyze(index)}>Analyze this move</button>
-            </div>
-          </>
         ) : (
           <>
             <p className="muted">Moves by the other side aren't graded automatically.</p>

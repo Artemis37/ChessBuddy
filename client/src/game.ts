@@ -28,8 +28,8 @@ export interface PlayedMove extends Questions {
   fenBefore: string;
   fenAfter: string;
   /**
-   * Graded automatically: the player's own moves, every move when playing both sides or reviewing
-   * a game, or moves off the book when learning an opening. Others only when asked. Questions
+   * Graded automatically: the player's own moves, or every move when playing both sides, learning
+   * an opening or reviewing a game. Others only when asked. Questions
    * (from Questions) can be asked about any move, before or after it is explained.
    */
   graded: boolean;

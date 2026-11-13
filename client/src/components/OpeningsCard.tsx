@@ -428,8 +428,8 @@ function StudyView({
       {caption}
       {choices.length === 0 && (
         <p className="muted small">
-          No book moves here: the opening book ends. Keep exploring; moves off the book are graded and the
-          evaluation bar shows how the position stands.
+          No book moves here: the opening book ends. Keep exploring; every move is graded and the evaluation
+          bar shows how the position stands.
         </p>
       )}
       {listed.length > 0 && (

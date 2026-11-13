@@ -82,8 +82,8 @@ export function dateLabel(date: string | undefined): string | null {
 }
 
 /**
- * The moves to start grading while reviewing a game, `free` at most: the move on the board
- * first, so its evaluation shows soon, then the earliest moves still waiting.
+ * The moves to start grading while learning an opening or reviewing a game, `free` at most: the
+ * move on the board first, so its evaluation shows soon, then the earliest moves still waiting.
  */
 export function nextToGrade(moves: PlayedMove[], current: number, free: number): number[] {
   const waiting = (i: number) => {
