@@ -2,7 +2,7 @@ import { Chess } from "chess.js";
 import type { EngineLine, EngineScore, MoveGrade, PositionEval } from "../../shared/types";
 import { classify, formatEval, negate, winPercent } from "./evaluation";
 import { hangingPieces, materialSwing, pieceName, sanLine, toMoveInput } from "./motifs";
-import { toWhite } from "./position";
+import { POSITION_LINES, suggestedLines, toWhite } from "./position";
 
 export interface Analyzer {
   analyze(fen: string, options: { multipv: number; depth: number }): Promise<EngineLine[]>;
@@ -10,8 +10,8 @@ export interface Analyzer {
 
 const LINE_PLIES = 8;
 const MATERIAL_NOTE_THRESHOLD = 2;
-/** Engine lines grading needs in the position before a move. */
-const GRADE_LINES = 3;
+/** Engine lines grading needs in the position before a move: as many as an evaluation's, so the cache shares them. */
+const GRADE_LINES = POSITION_LINES;
 
 /**
  * Grades one move with the engine and gathers the facts the coach is allowed to use.
@@ -67,15 +67,7 @@ export async function gradeMove(
     evalAfter: checkmate ? "#" : afterScore ? formatEval(afterScore) : "0.00",
     positionBefore: { score: toWhite(bestScore, mover) },
     positionAfter,
-    bestMoves: before
-      .filter((line) => line.pv.length > 0)
-      .map((line) => ({
-        uci: line.pv[0],
-        san: sanLine(fenBefore, line.pv.slice(0, 1))[0],
-        eval: formatEval(line.score),
-        line: sanLine(fenBefore, line.pv.slice(0, LINE_PLIES)),
-        position: { score: toWhite(line.score, mover) },
-      })),
+    bestMoves: suggestedLines(fenBefore, before, mover),
     opponentReply: sanLine(fenAfter, opponentLine.slice(0, LINE_PLIES)),
     motifs: [],
   };

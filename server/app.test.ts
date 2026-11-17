@@ -557,17 +557,23 @@ describe("POST /api/ask", () => {
 describe("POST /api/eval", () => {
   const AFTER_E4 = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1";
 
-  it("returns the evaluation from White's side", async () => {
+  it("returns the evaluation from White's side, with the side to move's top moves", async () => {
     const call = await start();
     // The fake engine scores Black-to-move positions at -30 for Black.
-    expect(await call("POST", "/api/eval", { fen: AFTER_E4 })).toEqual({ status: 200, body: { score: { cp: 30 } } });
+    expect(await call("POST", "/api/eval", { fen: AFTER_E4 })).toEqual({
+      status: 200,
+      body: {
+        score: { cp: 30 },
+        bestMoves: [{ uci: "e7e5", san: "e5", eval: "-0.30", line: ["e5", "Nf3"], position: { score: { cp: 30 } } }],
+      },
+    });
   });
 
   it("reports a finished game", async () => {
     const call = await start();
     expect(await call("POST", "/api/eval", { fen: MATED })).toEqual({
       status: 200,
-      body: { score: { mate: 0 }, outcome: "black" },
+      body: { score: { mate: 0 }, outcome: "black", bestMoves: [] },
     });
   });
 

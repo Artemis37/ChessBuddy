@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lastMoveSound, stepSound } from "./sound";
+import { lastEntrySound, lastMoveSound, stepEntrySound, stepSound } from "./sound";
 
 describe("lastMoveSound", () => {
   it("is a quiet move for a move that captures nothing", () => {
@@ -78,5 +78,27 @@ describe("stepSound", () => {
 
   it("is silent when the position shown doesn't change", () => {
     expect(stepSound(game, 4, 4)).toBeNull();
+  });
+});
+
+describe("sounds with edits in the list", () => {
+  // A set-up position: White Kd1 and Rb1, Black Ke8, White to move.
+  const setUp = "4k3/8/8/8/8/8/8/1R1K4 w - - 0 1";
+  const entries = [
+    { uci: "e2e4", fenAfter: "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1" },
+    { uci: "", fenAfter: setUp, edit: true },
+    { uci: "b1b8", fenAfter: "1R2k3/8/8/8/8/8/8/3K4 b - - 1 1" },
+  ];
+
+  it("plays the moves after an edit from the edited position", () => {
+    expect(lastEntrySound(entries)).toBe("check");
+    expect(lastEntrySound(entries.slice(0, 1))).toBe("move");
+  });
+
+  it("is silent for the edit itself, and when stepping onto it", () => {
+    expect(lastEntrySound(entries.slice(0, 2))).toBeNull();
+    expect(stepEntrySound(entries, 1, 2)).toBeNull();
+    expect(stepEntrySound(entries, 2, 3)).toBe("check");
+    expect(stepEntrySound(entries, 3, 1)).toBe("move");
   });
 });

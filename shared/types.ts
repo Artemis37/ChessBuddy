@@ -39,6 +39,14 @@ export interface SuggestedLine {
   position: PositionEval;
 }
 
+/**
+ * A position's evaluation (from /api/eval) with the engine's top moves there, best first (up to
+ * 3; none once the game is over), for the best-move arrows.
+ */
+export interface PositionAnalysis extends PositionEval {
+  bestMoves: SuggestedLine[];
+}
+
 /** Engine-derived facts about one move. The coach explains moves only from these. */
 export interface MoveGrade {
   fenBefore: string;

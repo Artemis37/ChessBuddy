@@ -7,7 +7,7 @@ import type {
   MoveGrade,
   OpeningContext,
   Perspective,
-  PositionEval,
+  PositionAnalysis,
   SessionResponse,
   StatusResponse,
 } from "../../shared/types";
@@ -37,12 +37,20 @@ export const api = {
   botMove: (fen: string, rating: BotRating) => request<BotMoveResponse>("/api/bot-move", { fen, rating }),
   /** With nextGraded, the next move will be graded too, so the server searches the position between them once. */
   grade: (fen: string, uci: string, nextGraded = false) => request<MoveGrade>("/api/grade", { fen, uci, nextGraded }),
-  evaluate: (fen: string) => request<PositionEval>("/api/eval", { fen }),
+  /** How the position stands, with the engine's top moves there. */
+  evaluate: (fen: string) => request<PositionAnalysis>("/api/eval", { fen }),
   /** How often each move is played in the rating band; background requests wait behind the others. */
   explorer: (fen: string, rating: number, background: boolean, signal?: AbortSignal) =>
     request<ExplorerStats>("/api/explorer", { fen, rating, background }, signal),
-  explain: (grade: MoveGrade, history: string[], model: string, perspective: Perspective, opening?: OpeningContext) =>
-    request<Explanation>("/api/explain", { grade, history, model, perspective, opening }),
+  /** With `start`, `history` begins from that set-up position rather than the usual start. */
+  explain: (
+    grade: MoveGrade,
+    history: string[],
+    model: string,
+    perspective: Perspective,
+    opening?: OpeningContext,
+    start?: string,
+  ) => request<Explanation>("/api/explain", { grade, history, model, perspective, opening, start }),
   /**
    * Asks about a move (its grade), after its explanation or without one, or about a position no
    * move has led to (fen), such as the start of the game.
@@ -57,5 +65,7 @@ export const api = {
     thread: FollowUp[];
     question: string;
     opening?: OpeningContext;
+    /** A set-up position `history` begins from, rather than the usual start. */
+    start?: string;
   }) => request<CoachReply>("/api/ask", body),
 };

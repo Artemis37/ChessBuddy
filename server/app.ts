@@ -11,7 +11,7 @@ import {
   type BotMoveResponse,
   type BotRating,
   type MoveGrade,
-  type PositionEval,
+  type PositionAnalysis,
   type SessionResponse,
   type StatusResponse,
 } from "../shared/types";
@@ -222,7 +222,7 @@ export function createApp({
   app.post("/api/eval", async (req, res) => {
     const body = parse(z.object({ fen }), req.body);
     const result = await withEngine("analyzer", () => evaluatePosition(analyzer, body.fen, analysisDepth));
-    res.json(result satisfies PositionEval);
+    res.json(result satisfies PositionAnalysis);
   });
 
   // background: the other rating bands, asked after the one on screen; they wait behind it.
@@ -266,6 +266,8 @@ export function createApp({
         line: z.array(z.string().max(10)).max(60),
       })
       .optional(),
+    // A set-up position the game began from, where `history` starts; the usual start otherwise.
+    start: fen.optional(),
   });
   // The coach's try_moves tool asks the grading connection for the best line in a position.
   const lineEngine = (position: string) =>
@@ -280,6 +282,7 @@ export function createApp({
         perspective: body.perspective,
         engine: lineEngine,
         opening: body.opening,
+        start: body.start,
       }),
     );
   });
@@ -319,6 +322,7 @@ export function createApp({
         perspective: body.perspective,
         engine: lineEngine,
         opening: body.opening,
+        start: body.start,
       }),
     );
   });

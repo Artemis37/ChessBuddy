@@ -205,6 +205,28 @@ describe("buildAskRequest", () => {
     expect(text).toContain("Engine choice 2 (evaluation +0.25)");
     expect(text).toMatch(/What should White play\?$/);
   });
+
+  it("numbers the moves so far from a set-up position, and says the position was set up", () => {
+    // Black to move at move 30 in a set-up endgame: two moves played since.
+    const setUp = "8/5k2/8/8/8/8/4K3/7R b - - 0 30";
+    const now = "8/8/5k2/8/8/4K3/8/7R b - - 2 31";
+    const ask = (history: string[]) =>
+      buildAskRequest(
+        { fen: now, analysis: [{ score: { cp: -900 }, pv: ["f6e5"] }] },
+        history,
+        null,
+        [],
+        "How do I hold this?",
+        { model: "claude-haiku-5-5", perspective: "mine", start: setUp },
+        "low",
+      );
+    const facts = (history: string[]) => {
+      const text = ask(history).messages[0].content as string;
+      return JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1));
+    };
+    expect(facts(["Kf6", "Ke3"])).toMatchObject({ setUpPosition: setUp, movesSoFar: "30... Kf6 31. Ke3" });
+    expect(facts([]).movesSoFar).toMatch(/set this position up/);
+  });
 });
 
 describe("Coach tool loop", () => {

@@ -1,5 +1,5 @@
 import { BOT_RATINGS, botRatingLabel, type BotRating } from "../../../shared/types";
-import type { Mode, Settings } from "../game";
+import { colorName, type Mode, type Settings } from "../game";
 
 interface Props {
   draft: Settings;
@@ -10,8 +10,8 @@ interface Props {
 const MODES: { mode: Mode; label: string }[] = [
   { mode: "bot", label: "Play the bot" },
   { mode: "both", label: "Play both sides" },
-  { mode: "learn", label: "Learn openings" },
-  { mode: "review", label: "Review a game" },
+  { mode: "analyze", label: "Analyze" },
+  { mode: "setup", label: "Set up a position" },
 ];
 
 export function modeLabel(mode: Mode): string {
@@ -19,15 +19,15 @@ export function modeLabel(mode: Mode): string {
 }
 
 const HELP: Record<Mode, string> = {
-  bot: "Bot ratings are estimates on the Chess.com scale. Only your moves are graded.",
-  both: "You move both colors and every move is graded. My color sits at the bottom of the board.",
-  learn:
-    "Step through an opening with → or its book moves, and play your own moves anywhere to explore. Every move is graded, book moves included. Explain any move to learn the idea behind it.",
-  review:
-    "Load one of your Chess.com games, or paste a game link or PGN. Every move of both sides is graded. Play moves for either side from any point to try another line, then go back to the game. Learn openings studies the game's opening, and this tab brings the review back. My color sits at the bottom of the board.",
+  bot: "Bot ratings are estimates on the Chess.com scale. Only your moves are graded. Step back to any of your turns and play another move to take it back; the bot answers from there.",
+  both: "You move both colors and every move is graded. Step back to any move and play from there to try another. My color sits at the bottom of the board.",
+  analyze:
+    "Every move is graded, book moves included. Play either side from any point to try another line. With a game loaded, Openings studies its opening and Review brings the game back.",
+  setup:
+    "Drag pieces onto the board from the Position card, or off the board to take them away, at any point of the game. Each edit is a step in the move list you can go back past. Without the bot you play both sides and every move is graded.",
 };
 
-/** The four modes, on the right of the board next to the move list. */
+/** The modes, on the right of the board next to the move list. */
 export function ModePicker({ draft, onChange }: Omit<Props, "onNewGame">) {
   return (
     <section className="card mode-card">
@@ -64,7 +64,17 @@ export function SetupCard({ draft, onChange, onNewGame }: Props) {
           </select>
         </label>
 
-        {draft.mode === "bot" && (
+        {draft.mode === "setup" && (
+          <label>
+            Bot
+            <select value={draft.vsBot ? "on" : "off"} onChange={(e) => onChange({ ...draft, vsBot: e.target.value === "on" })}>
+              <option value="off">Off: I play both</option>
+              <option value="on">Plays {colorName(draft.myColor === "w" ? "b" : "w")}</option>
+            </select>
+          </label>
+        )}
+
+        {(draft.mode === "bot" || (draft.mode === "setup" && draft.vsBot)) && (
           <label>
             Bot rating
             <select
@@ -83,7 +93,7 @@ export function SetupCard({ draft, onChange, onNewGame }: Props) {
           </label>
         )}
 
-        {draft.mode !== "learn" && draft.mode !== "review" && (
+        {(draft.mode === "bot" || draft.mode === "both") && (
           <button className="primary" onClick={onNewGame}>
             New game
           </button>

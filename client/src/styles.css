@@ -327,6 +327,123 @@ select {
   flex: none;
 }
 
+/* Analyze: the carousel fills the column under the settings, and its slides scroll on their own,
+   so the column itself never does. */
+.left-col.with-carousel {
+  overflow: hidden;
+}
+
+.left-col.with-carousel > .carousel {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.carousel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.carousel-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.carousel-tabs {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 4px;
+  padding: 3px;
+  background: #1f1e1b;
+  border-radius: 7px;
+}
+
+.carousel-tabs button {
+  padding: 5px 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.carousel-tabs button.on {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.carousel-arrow {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 30px;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.carousel-arrow svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.carousel-viewport {
+  flex: 1 1 0;
+  min-height: 0;
+  /* clip, not hidden: focus or scrollIntoView could scroll a hidden overflow sideways, between slides. */
+  overflow: clip;
+}
+
+.carousel-track {
+  display: flex;
+  height: 100%;
+  transition: transform 0.28s cubic-bezier(0.25, 0.8, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .carousel-track {
+    transition: none;
+  }
+}
+
+.carousel-slide {
+  flex: 0 0 100%;
+  min-width: 0;
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* The browser would otherwise anchor the scroll to content in here, and scroll whenever it changes. */
+  overflow-anchor: none;
+  scrollbar-width: thin;
+  scrollbar-color: #4b4845 transparent;
+}
+
+/* The slide scrolls, so the lists inside it don't need to. */
+.carousel-slide .pick-list,
+.carousel-slide .book-moves {
+  max-height: none;
+  overflow: visible;
+}
+
+.carousel-slide > .card {
+  border-radius: 0;
+}
+
 .right-col {
   grid-area: right;
 }
@@ -392,6 +509,38 @@ select {
   padding: 1px 8px;
   font-size: 12px;
   color: #c6c6c6;
+}
+
+/* The engine's best moves, when their arrows are on: in the strip's room, so they move nothing. */
+.engine-lines {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.engine-tag {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--text-body);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.engine-line {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* The move's arrow color: cyan for the best, green for the second, yellow for the third. */
+.engine-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
 }
 
 .board-row {
@@ -589,19 +738,27 @@ html:has(.app.phone) {
   align-items: center;
 }
 
-.m-sound {
+.m-sound,
+.m-best {
   padding: 8px 10px;
   background: transparent;
 }
 
-.m-sound svg {
+.m-sound svg,
+.m-best svg {
   width: 22px;
   height: 22px;
+}
+
+/* On a phone the arrows button is the icon and the same miniature switch. */
+.m-best {
+  gap: 6px;
 }
 
 /* Touch screens keep a button's hover look after a tap, so these buttons have none. */
 .m-menu-button:hover:not(:disabled),
 .m-sound:hover:not(:disabled),
+.m-best:hover:not(:disabled),
 .m-tool:hover:not(:disabled),
 .m-close:hover:not(:disabled) {
   background: transparent;
@@ -760,6 +917,47 @@ html:has(.app.phone) {
 
 .m-page > * {
   flex: none;
+}
+
+/* A dot for each panel, over the panel's bottom edge: they take no room, and the panels leave
+   room for them at the end. */
+.m-page {
+  padding-bottom: 14px;
+}
+
+.m-dots {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  display: flex;
+  padding: 0 4px;
+  border-radius: 8px 8px 0 0;
+  background: var(--surface);
+}
+
+.m-dot {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 14px;
+  padding: 0;
+  background: transparent;
+}
+
+.m-dot span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #5c5955;
+}
+
+.m-dot[aria-current="true"] span {
+  background: var(--text-body);
+}
+
+.m-dot:hover:not(:disabled) {
+  background: transparent;
 }
 
 .app.phone .m-page > .card {
@@ -1537,13 +1735,15 @@ html:has(.app.phone) {
   padding-left: 34px;
 }
 
-.sound-toggle {
+.sound-toggle,
+.best-toggle {
   display: inline-flex;
   align-items: center;
   gap: 5px;
 }
 
-.sound-toggle svg {
+.sound-toggle svg,
+.best-toggle svg {
   width: 17px;
   height: 17px;
   fill: none;
@@ -1557,8 +1757,62 @@ html:has(.app.phone) {
   fill: currentColor;
 }
 
+.best-toggle svg .faint {
+  opacity: 0.5;
+}
+
 .sound-toggle[aria-pressed="false"] {
   color: var(--text-body);
+}
+
+/* Best moves is an ordinary button in either state, in the app's black and white: only its
+   miniature switch says whether it's on, dark with the knob left while off, white with the
+   knob right while on. */
+.best-toggle {
+  gap: 7px;
+}
+
+.switch {
+  position: relative;
+  flex: none;
+  width: 28px;
+  height: 16px;
+  border-radius: 8px;
+  background: #1f1e1b;
+  box-shadow: inset 0 0 0 1px #5c5955;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #8d8c8b;
+  transition: transform 0.15s, background 0.15s;
+}
+
+[aria-pressed="true"] > .switch {
+  background: #f2f2f2;
+  box-shadow: inset 0 0 0 1px #f2f2f2;
+}
+
+[aria-pressed="true"] > .switch::after {
+  background: #262522;
+}
+
+[aria-pressed="true"] > .switch::after {
+  transform: translateX(12px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .switch,
+  .switch::after {
+    transition: none;
+  }
 }
 
 /* The end of the game, or the bot's error, on one line next to the controls: it never takes room
@@ -1631,6 +1885,11 @@ html:has(.app.phone) {
   color: var(--text);
 }
 
+/* An odd mode out, such as Analyze below the two Play modes, takes the whole row. */
+.segmented button:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
 .mode-card {
   flex: none;
   padding: 8px;
@@ -1650,6 +1909,199 @@ html:has(.app.phone) {
 
 .setup-row .primary {
   margin-left: auto;
+}
+
+/* Setting up a position */
+
+.position h3 {
+  margin: 12px 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.edit-toggle {
+  padding: 5px 12px;
+  font-size: 14px;
+}
+
+.edit-toggle.on {
+  background: rgba(160, 108, 255, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(180, 140, 255, 0.7);
+}
+
+.palette {
+  display: grid;
+  gap: 4px;
+  margin-top: 4px;
+  /* Dragging a piece mustn't scroll the panel instead. */
+  touch-action: none;
+}
+
+.palette-row {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+/* On the board's own square colors, so both sides' pieces stand out: White's on dark squares,
+   Black's on light ones. */
+.palette-piece {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  min-width: 0;
+  padding: 2px;
+  background: var(--square-dark);
+  border-radius: 6px;
+  touch-action: none;
+}
+
+.palette-row + .palette-row .palette-piece {
+  background: var(--square-light);
+}
+
+.palette-piece:hover:not(:disabled) {
+  background: var(--square-dark);
+  filter: brightness(1.08);
+}
+
+.palette-row + .palette-row .palette-piece:hover:not(:disabled) {
+  background: var(--square-light);
+}
+
+.palette-piece.eraser,
+.palette-piece.eraser:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.palette-piece img {
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* The piece a press on the board puts there: outlined in the board's highlight yellow. */
+.palette-piece.on,
+.palette-piece.on:hover:not(:disabled) {
+  box-shadow: inset 0 0 0 3px var(--highlight-light);
+}
+
+.palette-piece.eraser svg {
+  width: 70%;
+  height: 70%;
+  fill: none;
+  stroke: var(--text-body);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The piece following the pointer while it's dragged from the palette; above everything. */
+.palette-ghost {
+  position: fixed;
+  z-index: 1000;
+  width: 64px;
+  height: 64px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.palette-help {
+  min-height: 2.9em;
+}
+
+/* One line, always there: a problem coming or going moves nothing. */
+.position-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 30px;
+  margin-top: 8px;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.position-status > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.position-status.bad > span {
+  color: var(--error);
+}
+
+.position-status button {
+  flex: none;
+  padding: 3px 10px;
+  font-size: 13px;
+}
+
+.turn-pick {
+  margin-top: 6px;
+}
+
+.castling {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 10px;
+  margin: 10px 0 0;
+  padding: 0;
+  border: 0;
+  font-size: 14px;
+}
+
+.castling legend {
+  padding: 0;
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.fen-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.fen {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #1f1e1b;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: all;
+}
+
+.fen-row .search {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.fen-row button {
+  flex: none;
+}
+
+/* On a phone the palette is the first thing on the page: big enough to press with a finger. */
+.position.compact .palette-piece {
+  border-radius: 8px;
 }
 
 /* Learning openings */
@@ -2190,6 +2642,28 @@ html:has(.app.phone) {
 
 .move-row:nth-child(even) {
   background: var(--row-alt);
+}
+
+/* An edit of a set-up position: a row of its own across the columns. */
+.move-row.edit-row {
+  grid-template-columns: 1fr;
+  padding-left: 12px;
+}
+
+.move-gap {
+  padding-left: 5px;
+  color: var(--muted);
+}
+
+.move-cell.edit-cell {
+  color: #c9b1ff;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* On a phone the edit starts a line of its own, so the moves after it read as a new start. */
+.move-pair.edit-pair {
+  flex-basis: 100%;
 }
 
 .move-no {

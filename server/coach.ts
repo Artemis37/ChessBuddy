@@ -162,6 +162,17 @@ export interface ExplainOptions {
   engine?: LineEngine;
   /** Set when the player is learning an opening. */
   opening?: OpeningContext;
+  /**
+   * Set when the game didn't begin from the usual starting position but from one the player set
+   * up on the board: the position `history` starts from.
+   */
+  start?: string;
+}
+
+/** The moves so far, numbered from where they began, as the facts give them. */
+function movesSoFar(history: string[], start: string | undefined): string {
+  if (history.length > 0) return numberedLine(start ?? START_FEN, history);
+  return start ? "(none yet: the player set this position up on the board)" : "(starting position)";
 }
 
 /** The explanation the player is asking about, as text. */
@@ -359,13 +370,13 @@ function baseRequest(model: string, effort: Effort, schema: { [key: string]: unk
 export function buildExplainRequest(
   grade: MoveGrade,
   history: string[],
-  { model, perspective, opening }: ExplainOptions,
+  { model, perspective, opening, start }: ExplainOptions,
   effort: Effort,
   lines = boardLines(grade),
 ): Request {
   return {
     ...baseRequest(model, effort, EXPLANATION_SCHEMA),
-    messages: [{ role: "user", content: describeMove(grade, history, perspective, lines, opening, "explain") }],
+    messages: [{ role: "user", content: describeMove(grade, history, perspective, lines, opening, "explain", start) }],
   };
 }
 
@@ -380,14 +391,14 @@ export function buildAskRequest(
   explanation: ExplanationText | null,
   thread: FollowUp[],
   question: string,
-  { model, perspective, opening }: ExplainOptions,
+  { model, perspective, opening, start }: ExplainOptions,
   effort: Effort,
   lines = subjectLines(subject),
 ): Request {
   const facts =
     "grade" in subject
-      ? describeMove(subject.grade, history, perspective, lines, opening, explanation ? "explain" : "ask")
-      : describePosition(subject, history, perspective, lines, opening);
+      ? describeMove(subject.grade, history, perspective, lines, opening, explanation ? "explain" : "ask", start)
+      : describePosition(subject, history, perspective, lines, opening, start);
   const turns: Anthropic.Beta.BetaMessageParam[] = [{ role: "user", content: facts }];
   if (explanation) {
     turns.push({
@@ -463,6 +474,7 @@ function describeMove(
   lines: Record<string, BoardLine>,
   opening: OpeningContext | undefined,
   purpose: "explain" | "ask",
+  start?: string,
 ): string {
   const mover = grade.mover === "w" ? "White" : "Black";
   const other = grade.mover === "w" ? "Black" : "White";
@@ -476,7 +488,8 @@ function describeMove(
   });
   const facts = {
     movedBy: mover,
-    movesSoFar: history.length > 0 ? numberedLine(START_FEN, history) : "(starting position)",
+    ...(start && { setUpPosition: start }),
+    movesSoFar: movesSoFar(history, start),
     positionBeforeMove: grade.fenBefore,
     movePlayed: played,
     engineGrade: CLASSIFICATION_LABEL[grade.classification],
@@ -512,6 +525,7 @@ function describePosition(
   perspective: Perspective,
   lines: Record<string, BoardLine>,
   opening?: OpeningContext,
+  start?: string,
 ): string {
   const toMove = moverOf(subject) === "w" ? "White" : "Black";
   const other = toMove === "White" ? "Black" : "White";
@@ -526,7 +540,8 @@ function describePosition(
     });
   const facts = {
     toMove,
-    movesSoFar: history.length > 0 ? numberedLine(START_FEN, history) : "(starting position)",
+    ...(start && { setUpPosition: start }),
+    movesSoFar: movesSoFar(history, start),
     position: subject.fen,
     boardLines: Object.fromEntries(
       Object.entries(lines).map(([id, line]) => [id, { about: about[id], moves: numberedMoveMap(line) }]),

@@ -1,6 +1,6 @@
-import { useEffect, useRef, type ReactNode, type Ref } from "react";
+import { useEffect, useRef, type Ref } from "react";
 import type { Opening } from "../../../shared/openings";
-import { CLASSIFICATION, type PlayedMove } from "../game";
+import { CLASSIFICATION, moveRows, type PlayedMove } from "../game";
 import { GradeIcon } from "./icons";
 
 interface Props {
@@ -8,6 +8,8 @@ interface Props {
   /** Index of the move shown on the board; -1 for the starting position. */
   current: number;
   opening: Opening | null;
+  /** Shown instead of the opening's name when the position has none: "Starting Position" by default. */
+  unnamed?: string;
   white: string;
   black: string;
   /** "*" while the game is on, otherwise "1-0", "0-1" or "½-½". */
@@ -24,6 +26,7 @@ export function MoveList({
   moves,
   current,
   opening,
+  unnamed = "Starting Position",
   white,
   black,
   score,
@@ -39,43 +42,45 @@ export function MoveList({
     if (tableRef.current) keepInView(tableRef.current, currentRef.current, ".move-row", current);
   }, [current, moves.length]);
 
-  const rows: { number: number; white?: number; black?: number }[] = [];
-  moves.forEach((_, i) => {
-    if (i % 2 === 0) rows.push({ number: i / 2 + 1, white: i });
-    else rows[rows.length - 1].black = i;
-  });
-
+  const rows = moveRows(moves);
   const atStart = current < 0;
   const atEnd = current >= moves.length - 1;
+  const cell = (index: number) => (
+    <MoveCell
+      move={moves[index]}
+      selected={index === current}
+      buttonRef={index === current ? currentRef : undefined}
+      onSelect={() => onSelect(index)}
+    />
+  );
 
   return (
     <section className="card moves">
       <div className="opening" title={opening ? `${opening.eco} ${opening.name}` : undefined}>
-        {opening ? opening.name : "Starting Position"}
+        {opening ? opening.name : unnamed}
       </div>
       <div className="game-title">
         <strong>{white}</strong> - <strong>{black}</strong> <span className="score">{score}</span>
       </div>
       <div className="move-table" role="table" aria-label="Moves" ref={tableRef}>
-        {rows.map((row) => (
-          <div className="move-row" role="row" key={row.number}>
-            <span className="move-no" role="cell">
-              {row.number}.
-            </span>
-            {[row.white, row.black].map((index, column) => (
-              <span role="cell" key={column}>
-                {index !== undefined && (
-                  <MoveCell
-                    move={moves[index]}
-                    selected={index === current}
-                    buttonRef={index === current ? currentRef : undefined}
-                    onSelect={() => onSelect(index)}
-                  />
-                )}
+        {rows.map((row) =>
+          "edit" in row ? (
+            <div className="move-row edit-row" role="row" key={`edit-${row.edit}`}>
+              <span role="cell">{cell(row.edit)}</span>
+            </div>
+          ) : (
+            <div className="move-row" role="row" key={`${row.number}-${row.white ?? row.black}`}>
+              <span className="move-no" role="cell">
+                {row.number}.
               </span>
-            ))}
-          </div>
-        ))}
+              {[row.white, row.black].map((index, column) => (
+                <span role="cell" key={column}>
+                  {index !== undefined ? cell(index) : column === 0 && <span className="move-gap">…</span>}
+                </span>
+              ))}
+            </div>
+          ),
+        )}
       </div>
       <nav className="move-nav" aria-label="Move navigation">
         <button onClick={onFirst} disabled={atStart} aria-label="First move" title="First move (Home)">
@@ -112,27 +117,20 @@ function keepInView(list: HTMLElement, cell: HTMLElement | null, row: string, cu
   }
 }
 
-interface FlowProps extends Omit<Props, "opening" | "onPrevious" | "onNext"> {
-  /** More buttons beside First and Last, such as Undo. */
-  tools?: ReactNode;
-}
+type FlowProps = Omit<Props, "opening" | "unnamed" | "onPrevious" | "onNext">;
 
 /**
  * The move list on a phone, as phone chess apps show it: the moves wrap line after line, each
  * White move after its number. Back and Forward are on the toolbar below, First and Last here.
  */
-export function MoveFlow({ moves, current, white, black, score, onSelect, onFirst, onLast, tools }: FlowProps) {
+export function MoveFlow({ moves, current, white, black, score, onSelect, onFirst, onLast }: FlowProps) {
   const flowRef = useRef<HTMLDivElement>(null);
   const currentRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (flowRef.current) keepInView(flowRef.current, currentRef.current, ".move-pair", current);
   }, [current, moves.length]);
 
-  const pairs: number[][] = [];
-  moves.forEach((_, i) => {
-    if (i % 2 === 0) pairs.push([i]);
-    else pairs[pairs.length - 1].push(i);
-  });
+  const rows = moveRows(moves);
   const atStart = current < 0;
   const atEnd = current >= moves.length - 1;
 
@@ -143,7 +141,6 @@ export function MoveFlow({ moves, current, white, black, score, onSelect, onFirs
           <strong>{white}</strong> - <strong>{black}</strong> <span className="score">{score}</span>
         </span>
         <span className="flow-tools">
-          {tools}
           <button onClick={onFirst} disabled={atStart} aria-label="First move" title="First move">
             <NavIcon kind="first" />
           </button>
@@ -153,21 +150,28 @@ export function MoveFlow({ moves, current, white, black, score, onSelect, onFirs
         </span>
       </div>
       <div className="move-flow" role="list" aria-label="Moves" ref={flowRef}>
-        {pairs.map((pair) => (
-          // A move number stays with its moves when the line wraps.
-          <span className="move-pair" role="listitem" key={pair[0]}>
-            <span className="move-no">{pair[0] / 2 + 1}.</span>
-            {pair.map((index) => (
-              <MoveCell
-                key={index}
-                move={moves[index]}
-                selected={index === current}
-                buttonRef={index === current ? currentRef : undefined}
-                onSelect={() => onSelect(index)}
-              />
-            ))}
-          </span>
-        ))}
+        {rows.map((row) => {
+          const indices = "edit" in row ? [row.edit] : [row.white, row.black].filter((i) => i !== undefined);
+          return (
+            // A move number stays with its moves when the line wraps.
+            <span className={`move-pair ${"edit" in row ? "edit-pair" : ""}`} role="listitem" key={indices[0]}>
+              {"number" in row && (
+                <span className="move-no">
+                  {row.number}.{row.white === undefined && ".."}
+                </span>
+              )}
+              {indices.map((index) => (
+                <MoveCell
+                  key={index}
+                  move={moves[index]}
+                  selected={index === current}
+                  buttonRef={index === current ? currentRef : undefined}
+                  onSelect={() => onSelect(index)}
+                />
+              ))}
+            </span>
+          );
+        })}
         {moves.length === 0 && <p className="muted small">No moves yet. Play one on the board.</p>}
       </div>
     </section>
@@ -185,6 +189,19 @@ function MoveCell({
   buttonRef?: Ref<HTMLButtonElement>;
   onSelect: () => void;
 }) {
+  if (move.edit) {
+    return (
+      <button
+        ref={buttonRef}
+        className={`move-cell edit-cell ${selected ? "selected" : ""}`}
+        onClick={onSelect}
+        aria-current={selected ? "step" : undefined}
+        title="The position was edited here: step back past it to see it before"
+      >
+        <span>✎ Position edited</span>
+      </button>
+    );
+  }
   const cls = move.grade?.classification;
   const pending = !cls && !move.gradeError && (move.grading || (move.graded && !move.grade));
   // A graded book move shows both: that it's theory, and how good it is.

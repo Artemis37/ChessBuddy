@@ -18,6 +18,8 @@ export interface BoardArrow {
   from: Square;
   to: Square;
   color: string;
+  /** How thick, relative to a drawn arrow (1); the engine's lesser moves are thinner. */
+  weight?: number;
 }
 
 /** A move's grade icon, drawn on the corner of the square its piece moved to. */
@@ -80,6 +82,14 @@ interface Props {
   onMove: (from: Square, to: Square, promotion?: PieceSymbol) => boolean;
   onPremove: (premove: Premove) => void;
   onCancelPremoves: () => void;
+  /** Setting up a position, with Edit on: any piece goes to any square (onArrange), with no moves shown. */
+  editable?: boolean;
+  /** Moves a piece without the rules; false when it can't go there (a pawn to the last rank). */
+  onArrange?: (from: Square, to: Square) => boolean;
+  /** Setting up a position: a piece dragged off the board is taken off. Any piece can then be picked up. */
+  onRemove?: (square: Square) => void;
+  /** Setting up a position with a piece or the eraser picked: a press on a square does this instead. */
+  onSquareTap?: (square: Square) => void;
 }
 
 export function pieceUrl(color: Color, type: PieceSymbol): string {
@@ -124,6 +134,10 @@ export function Board({
   onMove,
   onPremove,
   onCancelPremoves,
+  editable = false,
+  onArrange,
+  onRemove,
+  onSquareTap,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState(0);
@@ -154,7 +168,8 @@ export function Board({
 
   useEffect(() => cancelPress, []);
 
-  const chess = useMemo(() => new Chess(fen), [fen]);
+  // A position being set up may not be one chess.js would accept yet, such as one without kings.
+  const chess = useMemo(() => new Chess(fen, { skipValidation: true }), [fen]);
   const placement = useMemo(() => withPremoves(placementOf(fen), premoves), [fen, premoves]);
   const placementKey = [...placement].map(([s, p]) => `${s}${p.color}${p.type}`).join();
   const squareSize = size / 8;
@@ -219,10 +234,23 @@ export function Board({
     return result;
   }, [chess, placement, fen, selected, movable, premoveColor]);
 
-  function canPick(square: Square): boolean {
+  /** A piece you may move, or premove. */
+  function canMove(square: Square): boolean {
     const piece = placement.get(square);
     if (!piece || !actingColor || piece.color !== actingColor) return false;
     return movable ? piece.color === chess.turn() : true;
+  }
+
+  /** A piece you may pick up: one you may move, or setting up a position, any piece. */
+  function canPick(square: Square): boolean {
+    return canMove(square) || ((editable || Boolean(onRemove)) && placement.has(square));
+  }
+
+  /** Setting up a position: moves the piece without the rules. */
+  function arrange(from: Square, to: Square, wasDropped: boolean) {
+    dropped.current = wasDropped ? `${from}${to}` : null;
+    if (!onArrange?.(from, to)) dropped.current = null;
+    setSelected(null);
   }
 
   function pointIn(event: PointerEvent): { x: number; y: number } {
@@ -303,6 +331,13 @@ export function Board({
       return;
     }
     if (event.button !== 0) return;
+    // Setting up a position with a piece or the eraser picked, a press puts it there or takes one off.
+    if (onSquareTap) {
+      clearNotes();
+      setSelected(null);
+      if (square) onSquareTap(square);
+      return;
+    }
     // A left click clears what was drawn, as on chess.com, and goes on to do what it would anyway.
     // A touch clears it once it lifts without having drawn, so another long press adds to it.
     if (event.pointerType !== "touch") clearNotes();
@@ -310,6 +345,10 @@ export function Board({
 
     if (selected && targets.has(square)) {
       tryMove(selected, square, false);
+      return;
+    }
+    if (selected && editable && square !== selected) {
+      arrange(selected, square, false);
       return;
     }
     if (event.pointerType === "touch" && !canPick(square)) {
@@ -369,6 +408,12 @@ export function Board({
       if (drag.deselectOnRelease) setSelected(null);
     } else if (target && targets.has(target)) {
       tryMove(drag.from, target, true);
+    } else if (target && editable) {
+      arrange(drag.from, target, true);
+    } else if (!target && onRemove) {
+      // Dropped off the board: setting up a position, that takes the piece off.
+      setSelected(null);
+      onRemove(drag.from);
     } else {
       setSelected(null);
     }
@@ -444,7 +489,11 @@ export function Board({
       {allArrows.length > 0 && (
         <svg className="arrows" viewBox="0 0 8 8">
           {allArrows.map((arrow, i) => (
-            <ArrowShape key={`${arrow.from}${arrow.to}${arrow.color}${i}`} arrow={arrow} orientation={orientation} />
+            <ArrowShape
+              key={`${arrow.from}${arrow.to}${arrow.color}${arrow.weight ?? 1}${i}`}
+              arrow={arrow}
+              orientation={orientation}
+            />
           ))}
         </svg>
       )}
@@ -499,9 +548,12 @@ function ArrowShape({ arrow, orientation }: { arrow: BoardArrow; orientation: Co
   const [cx, cy] = knight ? (dy === 2 ? [x1, y2] : [x2, y1]) : [x1, y1];
   const length = Math.hypot(x2 - cx, y2 - cy);
   const [ux, uy] = [(x2 - cx) / length, (y2 - cy) / length];
-  const head = 0.42;
+  // A thinner arrow keeps most of its head, so it still reads as an arrow.
+  const weight = arrow.weight ?? 1;
+  const head = 0.42 * (0.6 + 0.4 * weight);
   const [bx, by] = [x2 - ux * head, y2 - uy * head];
-  const [px, py] = [-uy * 0.26, ux * 0.26];
+  const wing = 0.26 * (0.6 + 0.4 * weight);
+  const [px, py] = [-uy * wing, ux * wing];
   const shaft = knight ? `${x1},${y1} ${cx},${cy} ${bx},${by}` : `${x1},${y1} ${bx},${by}`;
   return (
     <g opacity={0.85}>
@@ -509,7 +561,7 @@ function ArrowShape({ arrow, orientation }: { arrow: BoardArrow; orientation: Co
         points={shaft}
         fill="none"
         stroke={arrow.color}
-        strokeWidth={0.18}
+        strokeWidth={0.18 * weight}
         strokeLinecap="round"
         strokeLinejoin="round"
       />

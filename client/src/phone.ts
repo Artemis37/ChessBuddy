@@ -20,32 +20,60 @@ export function usePhoneLayout(): boolean {
 }
 
 /**
- * The phone layout's panels, left to right: the mode's own (the opening explorer, the game review
- * or the game's settings), the move list, and the coach.
+ * A panel of the phone layout. Left to right: the mode's own (Analyze has two, Openings and
+ * Review; the other modes one, the game's settings), then the move list and the coach.
  */
-export const PANELS = ["main", "moves", "coach"] as const;
-export type PanelId = (typeof PANELS)[number];
-/** The two panels the toolbar's middle-left button switches between. */
-export type SidePanel = Exclude<PanelId, "coach">;
+export type PanelId = string;
+export const MOVES_PANEL = "moves";
+export const COACH_PANEL = "coach";
+
+/** Every panel, left to right, given the mode's own. */
+export function panelsOf(mains: readonly PanelId[]): PanelId[] {
+  return [...mains, MOVES_PANEL, COACH_PANEL];
+}
 
 export interface PanelState {
   current: PanelId;
-  /** The last of the main and moves panels shown: closing the coach goes back to it. */
-  side: SidePanel;
+  /** The last panel shown other than the coach: closing the coach goes back to it. */
+  side: PanelId;
+  /** The last of the mode's own panels shown: the side button goes back to it from the moves. */
+  main: PanelId;
 }
 
-export function showPanel(state: PanelState, panel: PanelId): PanelState {
-  return { current: panel, side: panel === "coach" ? state.side : panel };
+/** Showing the mode's panel `main`. */
+export function startPanels(main: PanelId): PanelState {
+  return { current: main, side: main, main };
 }
 
-/** The panel the Explorer/Moves button goes to, and names: the other of the two. */
-export function otherSide(state: PanelState): SidePanel {
-  return state.side === "main" ? "moves" : "main";
+export function showPanel(state: PanelState, panel: PanelId, mains: readonly PanelId[]): PanelState {
+  return {
+    current: panel,
+    side: panel === COACH_PANEL ? state.side : panel,
+    main: mains.includes(panel) ? panel : state.main,
+  };
+}
+
+/**
+ * The panel the toolbar's side button goes to, and names: the moves from the mode's own panels,
+ * otherwise the last of the mode's own shown.
+ */
+export function otherSide(state: PanelState, mains: readonly PanelId[]): PanelId {
+  return mains.includes(state.side) ? MOVES_PANEL : state.main;
 }
 
 /** The coach button: opens the coach, or closes it and goes back to the panel before. */
-export function toggleCoach(state: PanelState): PanelState {
-  return showPanel(state, state.current === "coach" ? state.side : "coach");
+export function toggleCoach(state: PanelState, mains: readonly PanelId[]): PanelState {
+  return showPanel(state, state.current === COACH_PANEL ? state.side : COACH_PANEL, mains);
+}
+
+/**
+ * Whether the phone shows the players' bars above and below the board. Learning an opening
+ * without a game, the board is all there is to it and the bars would take the explorer's room.
+ * In Analyze they depend only on whether a game is loaded, never on the panel shown: sliding
+ * between Openings and Review must not move the board.
+ */
+export function showsPlayerBars(analyzing: boolean, gameLoaded: boolean): boolean {
+  return !analyzing || gameLoaded;
 }
 
 /** How far a finger must move sideways to switch panels. */
@@ -54,8 +82,9 @@ const SWIPE_MIN = 50;
 /**
  * The panel a swipe goes to: the next one for a swipe to the left, the previous one for a swipe
  * to the right. Null for a short or mostly vertical swipe, or past the first or last panel.
+ * The desktop's carousel uses it too.
  */
-export function swipeTarget(current: PanelId, dx: number, dy: number): PanelId | null {
+export function swipeTarget(panels: readonly PanelId[], current: PanelId, dx: number, dy: number): PanelId | null {
   if (Math.abs(dx) < SWIPE_MIN || Math.abs(dx) < 1.5 * Math.abs(dy)) return null;
-  return PANELS[PANELS.indexOf(current) + (dx < 0 ? 1 : -1)] ?? null;
+  return panels[panels.indexOf(current) + (dx < 0 ? 1 : -1)] ?? null;
 }

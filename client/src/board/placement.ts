@@ -22,7 +22,7 @@ function at(file: number, rank: number): Square | null {
 
 export function placementOf(fen: string): Placement {
   const placement: Placement = new Map();
-  for (const row of new Chess(fen).board()) {
+  for (const row of new Chess(fen, { skipValidation: true }).board()) {
     for (const piece of row) if (piece) placement.set(piece.square, { color: piece.color, type: piece.type });
   }
   return placement;

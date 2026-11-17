@@ -75,7 +75,7 @@ app.listen(PORT, (error?: Error) => {
   console.log(
     explorer.configured
       ? "Opening explorer: Lichess, with LICHESS_TOKEN"
-      : "Opening explorer: no LICHESS_TOKEN yet (Learn openings shows no move percentages)",
+      : "Opening explorer: no LICHESS_TOKEN yet (Analyze shows no move percentages)",
   );
   console.log(
     process.env.SQL_CONNECTION_STRING

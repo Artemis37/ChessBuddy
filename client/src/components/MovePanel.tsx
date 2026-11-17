@@ -7,7 +7,7 @@ import {
   type ExplanationStep,
   type StatusResponse,
 } from "../../../shared/types";
-import { CLASSIFICATION, colorName, moveNumber, type PlayedMove, type Questions } from "../game";
+import { CLASSIFICATION, colorName, moveNumberOf, type PlayedMove, type Questions } from "../game";
 import { activePath, type ThreadEntry } from "../thread";
 import { GradeIcon } from "./icons";
 
@@ -116,7 +116,31 @@ export function MovePanel({
   }
 
   const mine = move.color === myColor;
-  const title = `${moveNumber(index)} ${move.san}`;
+  // Setting up a position, an edit isn't a move: questions are about the position it made.
+  if (move.edit) {
+    return (
+      <section className="card panel">
+        <h2>Position edited</h2>
+        <p className="muted">
+          You changed the position here. Step back past it to see the position before, or ask the coach about this one.
+        </p>
+        <QuestionThread
+          questions={move}
+          threadKey={String(move.id)}
+          coach={coach}
+          busy={Boolean(move.asking)}
+          active={active}
+          placeholder="Ask about this position, e.g. what's the plan here?"
+          onShowStep={(step, reply) => onShowStep(index, step, reply)}
+          onAsk={(question, depth) => onAsk(index, question, depth)}
+          onShowVersion={(depth, version) => onShowVersion(index, depth, version)}
+        />
+        <div className="actions">{picker}</div>
+      </section>
+    );
+  }
+
+  const title = `${moveNumberOf(move)} ${move.san}`;
   const owner = learning
     ? `${colorName(move.color)} · ${move.book ? "book move" : "off the book"}`
     : (mine

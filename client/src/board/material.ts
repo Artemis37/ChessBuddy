@@ -32,7 +32,7 @@ export function capturedInPosition(fen: string): Record<Color, PieceSymbol[]> {
     w: { p: 0, n: 0, b: 0, r: 0, q: 0, k: 0 },
     b: { p: 0, n: 0, b: 0, r: 0, q: 0, k: 0 },
   };
-  for (const row of new Chess(fen).board()) {
+  for (const row of new Chess(fen, { skipValidation: true }).board()) {
     for (const piece of row) if (piece) count[piece.color][piece.type]++;
   }
   const result: Record<Color, PieceSymbol[]> = { w: [], b: [] };
@@ -51,7 +51,7 @@ export function capturedInPosition(fen: string): Record<Color, PieceSymbol[]> {
 /** White's material minus Black's, in pawns, from the pieces on the board. */
 export function materialBalance(fen: string): number {
   let balance = 0;
-  for (const row of new Chess(fen).board()) {
+  for (const row of new Chess(fen, { skipValidation: true }).board()) {
     for (const piece of row) {
       if (piece) balance += piece.color === "w" ? VALUE[piece.type] : -VALUE[piece.type];
     }

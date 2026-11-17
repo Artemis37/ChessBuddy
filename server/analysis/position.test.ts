@@ -32,18 +32,39 @@ describe("toWhite", () => {
 describe("evaluatePosition", () => {
   it("returns the engine score from White's side when White is to move", async () => {
     const engine = engineReturning({ score: { cp: 30 }, pv: ["e2e4"] });
-    expect(await evaluatePosition(engine, START, 12)).toEqual({ score: { cp: 30 } });
+    expect(await evaluatePosition(engine, START, 12)).toMatchObject({ score: { cp: 30 } });
   });
 
   it("flips the score when Black is to move", async () => {
     const engine = engineReturning({ score: { cp: -25 }, pv: ["c7c5"] });
-    expect(await evaluatePosition(engine, AFTER_E4, 12)).toEqual({ score: { cp: 25 } });
+    expect(await evaluatePosition(engine, AFTER_E4, 12)).toMatchObject({ score: { cp: 25 } });
   });
 
-  it("reports a finished game without asking the engine", async () => {
+  it("asks for three lines and gives the side to move's top moves, best first", async () => {
+    const asked: { multipv: number; depth: number }[] = [];
+    const engine: Analyzer = {
+      async analyze(_fen, options) {
+        asked.push(options);
+        return [
+          { score: { cp: -25 }, pv: ["c7c5", "g1f3"] },
+          { score: { cp: -35 }, pv: ["e7e5"] },
+          { score: { mate: -4 }, pv: [] },
+        ];
+      },
+    };
+    const result = await evaluatePosition(engine, AFTER_E4, 12);
+    expect(asked).toEqual([{ multipv: 3, depth: 12 }]);
+    // A line without moves is left out; evals are Black's, positions White's.
+    expect(result.bestMoves).toEqual([
+      { uci: "c7c5", san: "c5", eval: "-0.25", line: ["c5", "Nf3"], position: { score: { cp: 25 } } },
+      { uci: "e7e5", san: "e5", eval: "-0.35", line: ["e5"], position: { score: { cp: 35 } } },
+    ]);
+  });
+
+  it("reports a finished game without asking the engine, and no moves", async () => {
     const engine = engineReturning({ score: { cp: 0 }, pv: [] });
-    expect(await evaluatePosition(engine, WHITE_MATED, 12)).toEqual({ score: { mate: 0 }, outcome: "black" });
-    expect(await evaluatePosition(engine, STALEMATE, 12)).toEqual({ score: { cp: 0 }, outcome: "draw" });
+    expect(await evaluatePosition(engine, WHITE_MATED, 12)).toEqual({ score: { mate: 0 }, outcome: "black", bestMoves: [] });
+    expect(await evaluatePosition(engine, STALEMATE, 12)).toEqual({ score: { cp: 0 }, outcome: "draw", bestMoves: [] });
     expect(engine.calls).toBe(0);
   });
 });

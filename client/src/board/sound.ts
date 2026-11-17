@@ -44,3 +44,32 @@ export function stepSound(ucis: string[], from: number, to: number, opponent: Co
   if (to > from) return lastMoveSound(ucis.slice(0, to), opponent);
   return to < from ? "move" : null;
 }
+
+/** A move list's entry: a move, or an edit of the position on the board (a set-up position), which has no move. */
+export interface SoundEntry {
+  uci: string;
+  fenAfter: string;
+  edit?: boolean;
+}
+
+/**
+ * The sound of the last of `entries`: as lastMoveSound, the moves played from the position after
+ * the last edit before it, or from the start. An edit is silent.
+ */
+export function lastEntrySound(entries: SoundEntry[], opponent: Color | null = null): MoveSound | null {
+  const last = entries[entries.length - 1];
+  if (!last || last.edit) return null;
+  let edit = entries.length - 1;
+  while (edit >= 0 && !entries[edit].edit) edit--;
+  return lastMoveSound(
+    entries.slice(edit + 1).map((e) => e.uci),
+    opponent,
+    edit >= 0 ? entries[edit].fenAfter : undefined,
+  );
+}
+
+/** stepSound for a list that may hold edits. */
+export function stepEntrySound(entries: SoundEntry[], from: number, to: number, opponent: Color | null = null): MoveSound | null {
+  if (to > from) return lastEntrySound(entries.slice(0, to), opponent);
+  return to < from ? "move" : null;
+}

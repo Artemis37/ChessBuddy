@@ -1,17 +1,28 @@
 import { useEffect, useRef, useState, type ReactNode, type TouchEvent } from "react";
-import { otherSide, PANELS, showPanel, swipeTarget, toggleCoach, type PanelId, type PanelState } from "../phone";
+import {
+  COACH_PANEL,
+  MOVES_PANEL,
+  otherSide,
+  panelsOf,
+  showPanel,
+  startPanels,
+  swipeTarget,
+  toggleCoach,
+  type PanelId,
+} from "../phone";
 
-/** The mode's own panel: the opening explorer, the game review or the game's settings. */
+/** One of the mode's own panels: the opening explorer, the game review or the game's settings. */
 export interface MainPanel {
+  id: PanelId;
   label: string;
-  icon: "explorer" | "review" | "game";
+  icon: "explorer" | "review" | "game" | "setup";
   content: ReactNode;
   /** What it shows, such as the opening line or the game: another one shows from the top. */
   subject?: unknown;
 }
 
 interface Props {
-  /** The mode, named on the menu button; changing it shows its own panel. */
+  /** The mode, named on the menu button; changing it shows its own panel (`start`). */
   mode: string;
   title: string;
   /** The menu's content, given a way to close it. */
@@ -27,7 +38,12 @@ interface Props {
   board: ReactNode;
   /** The line under the board: the opening's name, an explanation playing, the end of the game. */
   strip: ReactNode;
-  main: MainPanel;
+  /** The mode's own panels, first on the left: Analyze has Openings and Review, the other modes one. */
+  mains: MainPanel[];
+  /** Which of `mains` the mode starts on. */
+  start: PanelId;
+  /** One of `mains` has slid into view (Analyze follows the opening or the game it shows). */
+  onMainShown?: (id: PanelId) => void;
   moves: ReactNode;
   coach: ReactNode;
   onFlip: () => void;
@@ -37,30 +53,39 @@ interface Props {
   canForward: boolean;
 }
 
-const START: PanelState = { current: "main", side: "main" };
-
 /**
  * The phone layout, after phone chess apps' analysis screen: the evaluation bar across the top,
  * the board, the opening's name, then a panel, and a toolbar at the bottom. The page never
- * scrolls; only the panel does. The panels sit side by side and slide: the mode's own, the
- * moves, and the coach. The toolbar flips the board, switches between the mode's panel and the
- * moves, opens the coach (the big green button) and steps back and forward.
+ * scrolls; only the panel does. The panels sit side by side and slide: the mode's own (two in
+ * Analyze: Openings and Review), the moves, and the coach, with a dot for each along the bottom.
+ * The toolbar flips the board, switches between the mode's panel and the moves, opens the coach
+ * (the big green button) and steps back and forward.
  */
 export function PhoneLayout(props: Props) {
-  const { mode, main } = props;
-  const [panels, setPanels] = useState(START);
+  const { mode, mains, start, onMainShown } = props;
+  const mainIds = mains.map((m) => m.id);
+  const panelIds = panelsOf(mainIds);
+  const [panels, setPanels] = useState(() => startPanels(start));
   const [menuOpen, setMenuOpen] = useState(false);
   const swipe = useRef<{ x: number; y: number } | null>(null);
   const pageRefs = useRef<(HTMLElement | null)[]>([]);
-  const index = PANELS.indexOf(panels.current);
+  // A mode's panels may differ from the last mode's: one left over shows the mode's first.
+  const current = panelIds.includes(panels.current) ? panels : startPanels(start);
+  const index = panelIds.indexOf(current.current);
 
   // Another mode starts on its own panel.
-  useEffect(() => setPanels(START), [mode]);
+  useEffect(() => setPanels(startPanels(start)), [mode]);
 
+  // Each of the mode's panels shows another subject (an opening line, a game) from the top.
+  const subjects = mains.map((m) => m.subject);
+  const seen = useRef<unknown[]>([]);
   useEffect(() => {
-    const page = pageRefs.current[0];
-    if (page) page.scrollTop = 0;
-  }, [main.subject]);
+    subjects.forEach((subject, i) => {
+      const page = pageRefs.current[i];
+      if (page && seen.current[i] !== subject) page.scrollTop = 0;
+    });
+    seen.current = subjects;
+  });
 
   // Panels slid out of view can't be reached with Tab or by a screen reader.
   useEffect(() => {
@@ -69,30 +94,39 @@ export function PhoneLayout(props: Props) {
     });
   }, [index]);
 
-  const show = (panel: PanelId) => setPanels((state) => showPanel(state, panel));
-  const side = otherSide(panels);
-  const sideButton = side === "main" ? { label: main.label, icon: main.icon } : { label: "Moves", icon: "moves" as const };
+  const go = (next: typeof current) => {
+    setPanels(next);
+    if (mainIds.includes(next.current)) onMainShown?.(next.current);
+  };
+  const show = (panel: PanelId) => go(showPanel(current, panel, mainIds));
+  const side = otherSide(current, mainIds);
+  const sideMain = mains.find((m) => m.id === side);
+  const sideButton = sideMain ? { label: sideMain.label, icon: sideMain.icon } : { label: "Moves", icon: "moves" as const };
 
   const onTouchStart = (event: TouchEvent) => {
     const target = event.target as HTMLElement;
     const touch = event.touches[0];
-    // Sliding a finger in a text box or a list picker selects text or values instead.
-    swipe.current = event.touches.length === 1 && !target.closest("input, textarea, select") ? { x: touch.clientX, y: touch.clientY } : null;
+    // Sliding a finger in a text box or a list picker selects text or values instead, and on the
+    // set-up palette it drags a piece.
+    swipe.current =
+      event.touches.length === 1 && !target.closest("input, textarea, select, [data-no-swipe]")
+        ? { x: touch.clientX, y: touch.clientY }
+        : null;
   };
   const onTouchEnd = (event: TouchEvent) => {
-    const start = swipe.current;
+    const from = swipe.current;
     swipe.current = null;
     const touch = event.changedTouches[0];
-    if (!start || !touch) return;
-    const target = swipeTarget(panels.current, touch.clientX - start.x, touch.clientY - start.y);
+    if (!from || !touch) return;
+    const target = swipeTarget(panelIds, current.current, touch.clientX - from.x, touch.clientY - from.y);
     if (target) show(target);
   };
 
-  const pages: Record<PanelId, { label: string; content: ReactNode }> = {
-    main: { label: main.label, content: main.content },
-    moves: { label: "Moves", content: props.moves },
-    coach: { label: "Coach", content: props.coach },
-  };
+  const pages: { id: PanelId; label: string; content: ReactNode }[] = [
+    ...mains,
+    { id: MOVES_PANEL, label: "Moves", content: props.moves },
+    { id: COACH_PANEL, label: "Coach", content: props.coach },
+  ];
 
   return (
     <div className={`app phone ${props.top ? "with-players" : ""}`}>
@@ -117,17 +151,32 @@ export function PhoneLayout(props: Props) {
 
       <div className="m-panels" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
         <div className="m-track" style={{ transform: `translateX(${-index * 100}%)` }}>
-          {PANELS.map((id, i) => (
+          {pages.map((page, i) => (
             <section
-              key={id}
-              ref={(page) => {
-                pageRefs.current[i] = page;
+              key={page.id}
+              ref={(element) => {
+                pageRefs.current[i] = element;
               }}
-              className={`m-page m-page-${id}`}
-              aria-label={pages[id].label}
+              className={`m-page m-page-${page.id}`}
+              aria-label={page.label}
             >
-              {pages[id].content}
+              {page.content}
             </section>
+          ))}
+        </div>
+        {/* Over the panel's bottom edge, so they take no room of their own. */}
+        <div className="m-dots" role="group" aria-label="Panels">
+          {pages.map((page, i) => (
+            <button
+              key={page.id}
+              className="m-dot"
+              onClick={() => show(page.id)}
+              aria-label={page.label}
+              aria-current={i === index ? "true" : undefined}
+              title={page.label}
+            >
+              <span aria-hidden />
+            </button>
           ))}
         </div>
       </div>
@@ -143,8 +192,8 @@ export function PhoneLayout(props: Props) {
         </button>
         <button
           className="m-coach"
-          onClick={() => setPanels(toggleCoach)}
-          aria-pressed={panels.current === "coach"}
+          onClick={() => go(toggleCoach(current, mainIds))}
+          aria-pressed={current.current === COACH_PANEL}
           aria-label="Coach"
           title="The coach: explain a move or ask about the position"
         >
@@ -222,6 +271,8 @@ const ICON_PATHS: Record<IconKind, string> = {
   review: "M5 20v-7M10 20V9M15 20v-5M20 20V4",
   // Sliders: the game's settings.
   game: "M4 7h9M17 7h3M15 4.5v5M4 17h3M11 17h9M9 14.5v5",
+  // A board with two squares filled: setting up a position.
+  setup: "M4 4h16v16H4zM4 12h16M12 4v16M6.5 6.5h3v3h-3zM14.5 14.5h3v3h-3z",
   moves: "M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01",
   flip: "M8 20V4M4.5 7.5 8 4l3.5 3.5M16 4v16M12.5 16.5 16 20l3.5-3.5",
   // A speech bubble: ask the coach.
